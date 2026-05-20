@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Literal
+
+from pydantic import AliasChoices, Field, field_validator
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+from app.core.config.mcp_servers import MCPServerSpec
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # ── Application ──────────────────────────────────────────────
+    APP_NAME: str = "Autonomous Travel Guide System"
+    APP_VERSION: str = "0.1.0"
+    ENVIRONMENT: Literal["development", "staging", "production"] = "development"
+    DEBUG: bool = False
+    LOG_LEVEL: str = "INFO"
+
+    # ── Server ───────────────────────────────────────────────────
+    HOST: str = "0.0.0.0"
+    PORT: int = 8000
+    WORKERS: int = 1
+
+    # ── Database ─────────────────────────────────────────────────
+    DATABASE_HOST: str = "localhost"
+    DATABASE_PORT: int = 5432
+    DATABASE_USER: str = "postgres"
+    DATABASE_PASSWORD: str = "postgres"
+    DATABASE_NAME: str = "agent_db"
+    DATABASE_URL: str | None = None
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_RECYCLE: int = 3600
+
+    # ── Redis ────────────────────────────────────────────────────
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_USER_NAME: str = "default"
+    REDIS_PASSWORD: str = ""
+    REDIS_DB: int = 0
+    REDIS_SSL: bool = True
+    REDIS_URL: str | None = None
+
+    # ── JWT / Auth ───────────────────────────────────────────────
+    JWT_SECRET_KEY: str = "CHANGE-ME-IN-PRODUCTION"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # ── Rate Limiting ────────────────────────────────────────────
+    RATE_LIMIT_PER_MINUTE: int = 60
+
+    # ── LLM Providers ───────────────────────────────────────────
+    OPENAI_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    GOOGLE_API_KEY: str = ""
+    DEFAULT_LLM_PROVIDER: Literal["openai", "anthropic", "gemini"] = "openai"
+    DEFAULT_MODEL_NAME: str = "openai/gpt-oss-120b"
+
+    # ── Research Tools ────────────────────────────────────────
+    TAVILY_API_KEY: str = Field(
+        default="",
+        validation_alias=AliasChoices("TAVILY_API_KEY", "TAVILY_KEY"),
+    )
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIMENSIONS: int = 1536
+    PGVECTOR_COLLECTION: str = "knowledge_base"
+    # Enable when PostgreSQL has pgvector extension support
+    # (e.g., pgvector/pgvector image). Off by default for local Postgres.
+    PGVECTOR_ENABLED: bool = False
+
+    # ── Observability ────────────────────────────────────────────
+    LANGSMITH_API_KEY: str = ""
+    LANGSMITH_PROJECT: str = "langgraph-agents"
+    OTEL_EXPORTER_ENDPOINT: str = ""
+
+    # ── MCP (Model Context Protocol) ────────────────────────────
+    MCP_SERVERS: list[MCPServerSpec] = Field(default_factory=list)
+
+    # ── Prompt assets (resolved under app/) ─────────────────────
+    PROMPT_ASSETS_DIR: str | None = None
+    PROMPT_REGISTRY_PATH: str | None = None
+
+    # ── Agent context (approximate tokenizer units via LangChain trim_messages) ──
+    # Mirrors recommended defaults in ``agent_orchestration.domain.memory_budget`` /
+    # ``tool_execution_policy``. Set to 0 to disable trimming / caps for that path.
+    AGENT_MAX_CONTEXT_TOKENS: int = 12_000
+    SUPERVISOR_ROUTING_MAX_TOKENS: int = 2_048
+    MAX_TOOL_OUTPUT_CHARS: int = 10_000
+    MEMORY_SUMMARIZATION_TRIGGER_MESSAGES: int = 40
+    MEMORY_SUMMARIZATION_KEEP_RECENT_MESSAGES: int = 12
+    MEMORY_SUMMARY_MAX_CHARS: int = 4_000
+    MEMORY_SUMMARIZER_PROVIDER: Literal["openai", "anthropic", "gemini", ""] = ""
+    MEMORY_SUMMARIZER_MODEL_NAME: str = ""
+
+    # ── Celery ───────────────────────────────────────────────────
+    CELERY_BROKER_URL: str = "redis://localhost:6379/1"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
+
+    @field_validator("TAVILY_API_KEY", mode="before")
+    @classmethod
+    def _strip_tavily_api_key(cls, v: object) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+    @field_validator("MCP_SERVERS", mode="before")
+    @classmethod
+    def _parse_mcp_servers(cls, v: object) -> object:
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            text = v.strip()
+            if not text:
+                return []
+            return json.loads(text)
+        return v
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Put `.env` before process env so repo config wins over stale OS/IDE variables.
+
+        Default pydantic-settings order lets ``DEFAULT_LLM_PROVIDER`` etc. from the
+        environment override ``.env``, which makes local edits look ignored.
+        """
+        return (
+            init_settings,
+            dotenv_settings,
+            env_settings,
+            file_secret_settings,
+        )
+
+    def get_database_url(self) -> str:
+        """Build async SQLAlchemy URL from either DATABASE_URL or components."""
+        if self.DATABASE_URL:
+            return self.DATABASE_URL
+        return (
+            f"postgresql+asyncpg://{self.DATABASE_USER}:{self.DATABASE_PASSWORD}"
+            f"@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_NAME}"
+        )
+
+    def get_database_sync_url(self) -> str:
+        """Return sync psycopg-style URL for tools requiring non-async drivers."""
+        return self.get_database_url().replace("+asyncpg", "")
+
+    def get_redis_url(self) -> str:
+        """Build Redis URL from either REDIS_URL or host credentials."""
+        if self.REDIS_URL:
+            return self.REDIS_URL
+        scheme = "rediss" if self.REDIS_SSL else "redis"
+        return (
+            f"{scheme}://{self.REDIS_USER_NAME}:{self.REDIS_PASSWORD}"
+            f"@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+        )
+
+    def resolve_prompt_assets_dir(self) -> Path:
+        """Directory containing intent subfolders (supervisor/, …). Injectable for Docker."""
+        if self.PROMPT_ASSETS_DIR:
+            return Path(self.PROMPT_ASSETS_DIR).expanduser().resolve()
+        root = Path(__file__).resolve().parent.parent.parent
+        return (
+            root
+            / "modules"
+            / "agent_orchestration"
+            / "infrastructure"
+            / "prompts"
+        ).resolve()
+
+    def resolve_prompt_registry_path(self) -> Path:
+        """TOML file mapping prompt intent keys to paths under ``PROMPT_ASSETS_DIR``."""
+        if self.PROMPT_REGISTRY_PATH:
+            return Path(self.PROMPT_REGISTRY_PATH).expanduser().resolve()
+        return (Path(__file__).resolve().parent / "prompt_registry.toml").resolve()
+
+
+def get_settings() -> Settings:
+    """Fresh ``Settings()`` each call so ``.env`` edits apply without stale LRU cache."""
+    return Settings()
