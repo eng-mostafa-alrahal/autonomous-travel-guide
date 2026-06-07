@@ -78,6 +78,37 @@ class Settings(BaseSettings):
     # (e.g., pgvector/pgvector image). Off by default for local Postgres.
     PGVECTOR_ENABLED: bool = False
 
+    # ── Knowledge Prep ───────────────────────────────────────────
+    KNOWLEDGE_PREP_ENABLED: bool = True
+    KNOWLEDGE_PREP_INCLUDE_MODEL: bool = True
+
+    # ── Travel Planner ───────────────────────────────────────────
+    # When true, the master graph routes through the travel-planner /
+    # knowledge-builder pipeline instead of the generic supervisor.
+    TRAVEL_PLANNER_ENABLED: bool = False
+    # Optional per-role model overrides (fall back to DEFAULT_MODEL_NAME when blank).
+    VALIDATOR_MODEL: str = ""
+    RESEARCHER_MODEL: str = ""
+    LOGISTICIAN_MODEL: str = ""
+
+    # ── Jina DeepSearch (deep research) ──────────────────────────
+    JINA_API_KEY: str = ""
+    JINA_DEEPSEARCH_MODEL: str = "jina-deepsearch-v1"
+    JINA_DEEPSEARCH_TIMEOUT_S: int = 300
+    JINA_DEEPSEARCH_REASONING_EFFORT: Literal["low", "medium", "high"] = "medium"
+
+    # ── Ingestion Service (RAG Document Processor) ───────────────
+    # External embedding/ingestion service. Leave INGESTION_SERVICE_URL empty
+    # to use the local pgvector ingestion fallback.
+    INGESTION_SERVICE_URL: str = ""
+    INGESTION_SERVICE_API_KEY: str = ""
+    INGESTION_SERVICE_TIMEOUT_S: int = 60
+    INGESTION_POLL_TIMEOUT_S: int = 300
+    INGESTION_POLL_INTERVAL_S: float = 2.0
+
+    # Overall budget for a single agent graph run (deep research can be slow).
+    AGENT_GRAPH_TIMEOUT_S: int = 900
+
     # ── Observability ────────────────────────────────────────────
     LANGSMITH_API_KEY: str = ""
     LANGSMITH_PROJECT: str = "langgraph-agents"

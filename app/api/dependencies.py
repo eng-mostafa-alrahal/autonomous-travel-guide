@@ -143,6 +143,13 @@ def _orchestrator_tool_config_sig(settings: Settings) -> tuple[object, ...]:
         settings.MEMORY_SUMMARY_MAX_CHARS,
         settings.MEMORY_SUMMARIZER_PROVIDER,
         settings.MEMORY_SUMMARIZER_MODEL_NAME,
+        settings.TRAVEL_PLANNER_ENABLED,
+        settings.VALIDATOR_MODEL,
+        settings.RESEARCHER_MODEL,
+        settings.LOGISTICIAN_MODEL,
+        bool(settings.JINA_API_KEY),
+        settings.JINA_DEEPSEARCH_MODEL,
+        bool(settings.INGESTION_SERVICE_URL),
         mcp_sig,
     )
 

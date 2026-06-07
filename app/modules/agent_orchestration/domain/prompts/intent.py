@@ -15,3 +15,8 @@ class PromptIntent(StrEnum):
     STRUCTURED_OUTPUT_SYSTEM = "structured_output_system"
     RESEARCHER_CONTEXT_VALIDATION = "researcher_context_validation"
     WORKSPACE_CONTEXT_VALIDATION = "workspace_context_validation"
+    KNOWLEDGE_DEDUP = "knowledge_dedup"
+    TRAVEL_REQUIREMENTS = "travel_requirements"
+    TRAVEL_SPECIALIST = "travel_specialist"
+    TRAVEL_CITY_EXPERT = "travel_city_expert"
+    TRAVEL_ITINERARY = "travel_itinerary"

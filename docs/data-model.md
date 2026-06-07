@@ -23,6 +23,18 @@ erDiagram
       timestamptz created_at
       timestamptz updated_at
     }
+    KB_DESTINATIONS {
+      uuid id PK "UUIDv7"
+      string destination_key UK "normalized 'city|country'"
+      string city "nullable"
+      string country "nullable"
+      string status "none|building|ready|failed"
+      int doc_count
+      text error_message "nullable"
+      timestamptz indexed_at "nullable"
+      timestamptz created_at
+      timestamptz updated_at
+    }
 ```
 
 ## Tables
@@ -53,6 +65,25 @@ Relationship: `sessions = relationship("SessionORM", back_populates="user", casc
 
 **The session `id` doubles as the LangGraph `thread_id`.** This is the glue between the REST surface and the checkpointer — deleting a session does *not* delete the thread's checkpoint rows (they're harmless orphans; prune manually if desired).
 
+### `kb_destinations` (`app/infrastructure/database/postgres/models/kb_destination_model.py`)
+
+Tracks which destinations have an indexed knowledge base. Shared by the travel planner (to detect a KB miss) and the knowledge builder (to mark progress).
+
+| Column | Type | Constraints |
+|---|---|---|
+| `id` | `UUID` | PK, default `uuid7()` |
+| `destination_key` | `VARCHAR(512)` | unique, indexed — normalized `"city\|country"` (lowercased, trimmed) |
+| `city` | `VARCHAR(255)` | nullable |
+| `country` | `VARCHAR(255)` | nullable |
+| `status` | `VARCHAR(32)` | not null, default `"none"` — one of `none` / `building` / `ready` / `failed` |
+| `doc_count` | `INTEGER` | not null, default `0` |
+| `error_message` | `TEXT` | nullable |
+| `indexed_at` | `TIMESTAMPTZ` | nullable |
+| `created_at` | `TIMESTAMPTZ` | not null |
+| `updated_at` | `TIMESTAMPTZ` | not null, auto-updated |
+
+The canonical key is built by `build_destination_key()` in `app/modules/agent_orchestration/domain/kb_destination.py`.
+
 ### ID strategy
 
 All primary keys are **UUIDv7** (see `app/shared/uuid_utils.py`). UUIDv7s are time-sortable, which keeps B-tree indexes compact and list ordering intuitive ("newest first" === `ORDER BY id DESC`).
@@ -63,6 +94,7 @@ All primary keys are **UUIDv7** (see `app/shared/uuid_utils.py`). UUIDv7s are ti
 
 - `alembic/env.py` wires a sync psycopg URL (via `settings.get_database_sync_url()`) so Alembic doesn't need async drivers.
 - `alembic/versions/31121b69cc8e_initial_schema.py` is the initial migration (creates `users` + `sessions`).
+- `alembic/versions/a1b2c3d4e5f6_add_kb_destinations.py` adds the `kb_destinations` table.
 
 Commands:
 
@@ -74,7 +106,7 @@ alembic downgrade -1              # rollback one
 
 ## Unit of Work
 
-Database access uses a `SqlAlchemyUnitOfWork` (in `app/infrastructure/database/postgres/unit_of_work.py`) that exposes repositories (`user_repository`, `session_repository`) and commits/rolls-back atomically. Use cases always interact through the UoW — they never construct repositories directly.
+Database access uses a `SqlAlchemyUnitOfWork` (in `app/infrastructure/database/postgres/unit_of_work.py`) that exposes repositories (`users`, `sessions`, `kb_destinations`) and commits/rolls-back atomically. Use cases always interact through the UoW — they never construct repositories directly.
 
 ```python
 async with uow:
@@ -89,6 +121,7 @@ Domain entities are pure dataclasses/Pydantic under `modules/<feature>/domain/*`
 
 - `UserORM` ↔ `User`  (`modules/users/domain/user.py`)
 - `SessionORM` ↔ `Session`  (`modules/sessions/domain/session.py`)
+- `KBDestinationORM` ↔ `KBDestination`  (`modules/agent_orchestration/domain/kb_destination.py`)
 
 ## pgvector (optional)
 

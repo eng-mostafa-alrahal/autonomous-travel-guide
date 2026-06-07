@@ -1,0 +1,24 @@
+---
+version: "1.0"
+model_target: structured-output
+trace_tags:
+  agent: knowledge_builder
+  prompt_key: knowledge_dedup
+---
+{{ goal_section }}You are preparing a destination knowledge base. Below is raw deep-research text that may contain repetition, contradictions, marketing fluff, and overlapping passages.
+
+Raw research:
+
+{{ retrieved_evidence }}
+
+Clean and reorganize it into self-contained, non-redundant segments grouped by topic (for example: history, culture, food, attractions, transport, customs_etiquette, safety, best_time_to_visit). Rules:
+
+- Remove duplicated or near-duplicated information; merge overlapping facts.
+- Keep each segment focused on a single topic and understandable on its own.
+- Preserve concrete, useful facts (names, neighborhoods, dishes, transit options, seasons). Drop filler and promotional language.
+- Do not invent facts that are not supported by the research.
+- Use short lowercase topic labels.
+
+Return only the structured object with these fields:
+
+{{ compact_schema }}

@@ -87,6 +87,41 @@ Provider builders live in `app/infrastructure/llm_gateways/`.
 
 When `PGVECTOR_ENABLED=true` **and** `OPENAI_API_KEY` is set, the RAG tool is constructed with a live `pgvector` retriever.  If initialisation fails, a warning is logged and the tool registers with a disabled retriever — callers get a polite "no documents" message rather than an error.
 
+## Travel Guide
+
+These drive the travel-planner and knowledge-builder graphs.
+
+| Var | Default | Notes |
+|---|---|---|
+| `KNOWLEDGE_PREP_ENABLED` | `true` | Enables the dedup/preparation step before ingestion. |
+| `KNOWLEDGE_PREP_INCLUDE_MODEL` | `true` | Whether the prep step uses an LLM pass. |
+| `TRAVEL_PLANNER_ENABLED` | `false` | When `true`, the master graph routes through the travel-planner / knowledge-builder pipeline instead of the generic supervisor. |
+| `VALIDATOR_MODEL` | `` | Model override for the deduplication/validator agent. Falls back to `DEFAULT_MODEL_NAME`. |
+| `RESEARCHER_MODEL` | `` | Model override for the deep-research agent. |
+| `LOGISTICIAN_MODEL` | `` | Model override for the flights / travel & logistics agent. |
+
+### Jina DeepSearch (deep research)
+
+| Var | Default | Notes |
+|---|---|---|
+| `JINA_API_KEY` | `` | Required for the deep-research agent. |
+| `JINA_DEEPSEARCH_MODEL` | `jina-deepsearch-v1` | — |
+| `JINA_DEEPSEARCH_TIMEOUT_S` | `300` | Per-request timeout for deep research. |
+| `JINA_DEEPSEARCH_REASONING_EFFORT` | `medium` | One of `low` \| `medium` \| `high`. |
+
+### Ingestion service (RAG Document Processor)
+
+| Var | Default | Notes |
+|---|---|---|
+| `INGESTION_SERVICE_URL` | `` | Base URL of the external RAG Document Processor. **Leave empty to use the local pgvector ingestion fallback.** |
+| `INGESTION_SERVICE_API_KEY` | `` | The `rag_...` client key, sent as the `X-API-Key` header. |
+| `INGESTION_SERVICE_TIMEOUT_S` | `60` | HTTP client timeout per call. |
+| `INGESTION_POLL_TIMEOUT_S` | `300` | Max time to poll a job before giving up. |
+| `INGESTION_POLL_INTERVAL_S` | `2.0` | Delay between job-status polls. |
+| `AGENT_GRAPH_TIMEOUT_S` | `900` | Overall budget for a single agent graph run (deep research can be slow). |
+
+When `INGESTION_SERVICE_URL` is empty the knowledge builder chunks and embeds locally into pgvector. When it is set, the builder submits text to the external service, polls the job, then upserts the returned vectors into pgvector **without re-embedding** — so the service must embed with the same `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` used at query time.
+
 ## Observability
 
 | Var | Default | Notes |
@@ -149,6 +184,10 @@ Some settings only take effect when the compiled LangGraph is rebuilt. The orche
 - `SUPERVISOR_ROUTING_MAX_TOKENS`
 - `MAX_TOOL_OUTPUT_CHARS`
 - `MEMORY_SUMMARIZATION_*`
+- `TRAVEL_PLANNER_ENABLED`
+- `VALIDATOR_MODEL`, `RESEARCHER_MODEL`, `LOGISTICIAN_MODEL`
+- `JINA_API_KEY` (bool), `JINA_DEEPSEARCH_MODEL`
+- `INGESTION_SERVICE_URL` (bool)
 - `MCP_SERVERS` (JSON-normalised)
 
 When any of these change, the next request builds a fresh orchestrator with a new compiled graph. Other settings (log level, rate limits, CORS, etc.) apply immediately. MCP **tool bootstrap** is only performed at application startup — add/remove MCP servers requires an app restart.

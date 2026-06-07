@@ -1,0 +1,14 @@
+---
+version: "1.0"
+model_target: structured-output
+trace_tags:
+  agent: travel_planner
+  prompt_key: travel_requirements
+---
+{{ goal_section }}Extract the user's trip requirements from the conversation above.
+
+Only fill fields the user actually stated or clearly implied; leave everything else null. Do not invent a destination, trip length, or budget that was not mentioned.
+
+Return only the structured object with these fields:
+
+{{ compact_schema }}

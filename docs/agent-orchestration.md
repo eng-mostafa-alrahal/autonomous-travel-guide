@@ -58,6 +58,10 @@ flowchart LR
 
 The master graph intentionally only has two nodes — `supervisor` and `error_handler`. All real logic lives in subgraphs so that each can be tested and evolved independently.
 
+### Travel mode
+
+When `TRAVEL_PLANNER_ENABLED` is true, `MainGraphOrchestrator._compile` builds the **travel master graph** instead (`_compile_travel` → `travel_master_builder.build_travel_master_graph`, state `TravelRootState`). It wires the [Travel Planner](./travel-planner.md) and [Knowledge Builder](./knowledge-builder.md) subgraphs together with a KB-miss auto-trigger and re-plan loop. The supervisor graph above is used only when the flag is off. `_build_initial_state` likewise branches on the flag to seed the correct state shape.
+
 ## Supervisor subgraph
 
 ```mermaid

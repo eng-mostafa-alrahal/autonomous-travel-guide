@@ -40,7 +40,26 @@ def build_pgvector_store() -> PGVector:
     return store
 
 
-def build_pgvector_retriever(*, top_k: int = 5) -> BaseRetriever:
-    """Convenience wrapper that returns a retriever ready for the RAG tool."""
+def build_pgvector_retriever(
+    *, top_k: int = 5, metadata_filter: dict[str, object] | None = None
+) -> BaseRetriever:
+    """Convenience wrapper that returns a retriever ready for the RAG tool.
+
+    Pass ``metadata_filter`` to scope retrieval to a subset of documents
+    (e.g. a single destination).
+    """
     store = build_pgvector_store()
-    return store.as_retriever(search_kwargs={"k": top_k})
+    search_kwargs: dict[str, object] = {"k": top_k}
+    if metadata_filter:
+        search_kwargs["filter"] = metadata_filter
+    return store.as_retriever(search_kwargs=search_kwargs)
+
+
+def build_destination_retriever(
+    destination_key: str, *, top_k: int = 5
+) -> BaseRetriever:
+    """Retriever scoped to a single destination via the ``destination_key`` metadata."""
+    return build_pgvector_retriever(
+        top_k=top_k,
+        metadata_filter={"destination_key": {"$eq": destination_key}},
+    )

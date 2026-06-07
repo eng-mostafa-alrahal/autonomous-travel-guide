@@ -21,6 +21,9 @@ from langgraph.types import Command
 from app.core.config.settings import get_settings
 from app.core.exceptions import GraphCompilationError, GraphNotInterruptedError
 from app.core.observability.request_context import get_request_id
+from app.infrastructure.database.postgres.unit_of_work import SqlAlchemyUnitOfWork
+from app.infrastructure.ingestion.factory import build_ingestion_service
+from app.infrastructure.research.jina_deepsearch_client import JinaDeepSearchClient
 from app.modules.agent_orchestration.application.dtos.agent_result import (
     AgentEvent,
     AgentRunResult,
@@ -31,6 +34,9 @@ from app.modules.agent_orchestration.application.ports.agent_orchestrator_port i
 )
 from app.modules.agent_orchestration.application.ports.llm_registry_port import ILLMRegistry
 from app.modules.agent_orchestration.application.ports.tool_registry_port import IToolRegistry
+from app.modules.agent_orchestration.application.use_cases.kb_status_service import (
+    KBStatusService,
+)
 from app.modules.agent_orchestration.domain.states.supervisor_state import SupervisorState
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.mappers.state_mapper import (
     snapshot_is_paused,
@@ -50,6 +56,9 @@ from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.s
 )
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.tool_partition import (
     partition_tools_for_agents,
+)
+from app.modules.agent_orchestration.infrastructure.langgraph_engine.travel_master_builder import (
+    build_travel_master_graph,
 )
 from app.modules.agent_orchestration.infrastructure.registries.file_prompt_registry import (
     FilePromptRegistry,
@@ -72,57 +81,127 @@ class MainGraphOrchestrator(IAgentOrchestrator):
     def _compile(self) -> CompiledStateGraph:
         if self._compiled is not None:
             return self._compiled
-
         try:
             settings = get_settings()
-            llm = self._llm_registry.get_model(
-                settings.DEFAULT_LLM_PROVIDER,
-                settings.DEFAULT_MODEL_NAME,
-            )
-            researcher_llm = llm
-            memory_llm = llm
-            if settings.MEMORY_SUMMARIZER_PROVIDER and settings.MEMORY_SUMMARIZER_MODEL_NAME:
-                memory_llm = self._llm_registry.get_model(
-                    settings.MEMORY_SUMMARIZER_PROVIDER,
-                    settings.MEMORY_SUMMARIZER_MODEL_NAME,
-                )
-            all_tools = self._tool_registry.get_tools(self._tool_registry.list_available())
-            research_tools, workspace_tools = partition_tools_for_agents(all_tools)
-
-            prompt_provider = FilePromptRegistry(
-                assets_dir=settings.resolve_prompt_assets_dir(),
-                registry_path=settings.resolve_prompt_registry_path(),
-            )
-
-            supervisor_subgraph = build_supervisor_graph(
-                llm,
-                research_tools,
-                workspace_tools,
-                prompt_provider=prompt_provider,
-                researcher_llm=researcher_llm,
-                agent_max_context_tokens=settings.AGENT_MAX_CONTEXT_TOKENS,
-                supervisor_routing_max_tokens=settings.SUPERVISOR_ROUTING_MAX_TOKENS,
-                max_tool_output_chars=settings.MAX_TOOL_OUTPUT_CHARS,
-                memory_trigger_messages=settings.MEMORY_SUMMARIZATION_TRIGGER_MESSAGES,
-                memory_keep_recent_messages=settings.MEMORY_SUMMARIZATION_KEEP_RECENT_MESSAGES,
-                memory_summary_max_chars=settings.MEMORY_SUMMARY_MAX_CHARS,
-                memory_llm=memory_llm,
-            ).compile()
-
-            master = StateGraph(SupervisorState)
-            master.add_node("supervisor", supervisor_subgraph)
-            master.add_node("error_handler", error_handler_node)
-
-            master.set_entry_point("supervisor")
-            master.add_edge("supervisor", "error_handler")
-            master.add_edge("error_handler", END)
-
-            checkpointer = get_postgres_saver()
-            self._compiled = master.compile(checkpointer=checkpointer)
-            logger.info("Master agent graph compiled successfully (with checkpointer)")
+            if settings.TRAVEL_PLANNER_ENABLED:
+                self._compiled = self._compile_travel(settings)
+            else:
+                self._compiled = self._compile_supervisor(settings)
             return self._compiled
         except Exception as exc:
             raise GraphCompilationError(detail=str(exc)) from exc
+
+    def _compile_supervisor(self, settings: Any) -> CompiledStateGraph:
+        llm = self._llm_registry.get_model(
+            settings.DEFAULT_LLM_PROVIDER,
+            settings.DEFAULT_MODEL_NAME,
+        )
+        researcher_llm = llm
+        memory_llm = llm
+        if settings.MEMORY_SUMMARIZER_PROVIDER and settings.MEMORY_SUMMARIZER_MODEL_NAME:
+            memory_llm = self._llm_registry.get_model(
+                settings.MEMORY_SUMMARIZER_PROVIDER,
+                settings.MEMORY_SUMMARIZER_MODEL_NAME,
+            )
+        all_tools = self._tool_registry.get_tools(self._tool_registry.list_available())
+        research_tools, workspace_tools = partition_tools_for_agents(all_tools)
+
+        prompt_provider = FilePromptRegistry(
+            assets_dir=settings.resolve_prompt_assets_dir(),
+            registry_path=settings.resolve_prompt_registry_path(),
+        )
+
+        supervisor_subgraph = build_supervisor_graph(
+            llm,
+            research_tools,
+            workspace_tools,
+            prompt_provider=prompt_provider,
+            researcher_llm=researcher_llm,
+            agent_max_context_tokens=settings.AGENT_MAX_CONTEXT_TOKENS,
+            supervisor_routing_max_tokens=settings.SUPERVISOR_ROUTING_MAX_TOKENS,
+            max_tool_output_chars=settings.MAX_TOOL_OUTPUT_CHARS,
+            memory_trigger_messages=settings.MEMORY_SUMMARIZATION_TRIGGER_MESSAGES,
+            memory_keep_recent_messages=settings.MEMORY_SUMMARIZATION_KEEP_RECENT_MESSAGES,
+            memory_summary_max_chars=settings.MEMORY_SUMMARY_MAX_CHARS,
+            memory_llm=memory_llm,
+        ).compile()
+
+        master = StateGraph(SupervisorState)
+        master.add_node("supervisor", supervisor_subgraph)
+        master.add_node("error_handler", error_handler_node)
+
+        master.set_entry_point("supervisor")
+        master.add_edge("supervisor", "error_handler")
+        master.add_edge("error_handler", END)
+
+        checkpointer = get_postgres_saver()
+        compiled = master.compile(checkpointer=checkpointer)
+        logger.info("Master agent graph compiled successfully (supervisor mode)")
+        return compiled
+
+    def _compile_travel(self, settings: Any) -> CompiledStateGraph:
+        llm = self._llm_registry.get_model(
+            settings.DEFAULT_LLM_PROVIDER,
+            settings.DEFAULT_MODEL_NAME,
+        )
+
+        def _opt_model(name: str | None) -> Any:
+            return (
+                self._llm_registry.get_model(settings.DEFAULT_LLM_PROVIDER, name)
+                if name
+                else None
+            )
+
+        prompt_provider = FilePromptRegistry(
+            assets_dir=settings.resolve_prompt_assets_dir(),
+            registry_path=settings.resolve_prompt_registry_path(),
+        )
+
+        available = self._tool_registry.list_available()
+        web_search_tool = (
+            self._tool_registry.get_tools(["web_search"])[0]
+            if "web_search" in available
+            else None
+        )
+
+        def retriever_provider(destination_key: str) -> Any:
+            if not (settings.PGVECTOR_ENABLED and settings.OPENAI_API_KEY and destination_key):
+                return None
+            try:
+                from app.infrastructure.database.postgres.vector_store import (
+                    build_destination_retriever,
+                )
+
+                return build_destination_retriever(destination_key)
+            except Exception:
+                logger.warning("Failed to build destination retriever", exc_info=True)
+                return None
+
+        deep_research_client = JinaDeepSearchClient(
+            api_key=settings.JINA_API_KEY,
+            model=settings.JINA_DEEPSEARCH_MODEL,
+            reasoning_effort=settings.JINA_DEEPSEARCH_REASONING_EFFORT,
+            timeout_s=settings.JINA_DEEPSEARCH_TIMEOUT_S,
+        )
+        ingestion_service = build_ingestion_service(settings)
+        kb_status_service = KBStatusService(uow_factory=SqlAlchemyUnitOfWork)
+
+        master = build_travel_master_graph(
+            llm=llm,
+            prompt_provider=prompt_provider,
+            deep_research_client=deep_research_client,
+            ingestion_service=ingestion_service,
+            kb_status_service=kb_status_service,
+            web_search_tool=web_search_tool,
+            retriever_provider=retriever_provider,
+            validator_llm=_opt_model(settings.VALIDATOR_MODEL),
+            logistician_llm=_opt_model(settings.LOGISTICIAN_MODEL),
+        )
+
+        checkpointer = get_postgres_saver()
+        compiled = master.compile(checkpointer=checkpointer)
+        logger.info("Master agent graph compiled successfully (travel mode)")
+        return compiled
 
     # ── helpers (LangGraph-specific, kept private) ───────────────
 
@@ -132,12 +211,37 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         session_id: str,
         user_id: str,
     ) -> dict[str, Any]:
-        return {
+        base = {
             "messages": [HumanMessage(content=user_message)],
             "session_id": session_id,
             "user_id": user_id,
             "error": None,
             "human_feedback": None,
+        }
+        if get_settings().TRAVEL_PLANNER_ENABLED:
+            return {
+                **base,
+                "requirements": {},
+                "requirements_complete": False,
+                "missing_slots": [],
+                "pending_specialists": [],
+                "next_specialist": None,
+                "specialist_outputs": {},
+                "itinerary": None,
+                "destination_key": "",
+                "city": None,
+                "country": None,
+                "topics": [],
+                "approved": None,
+                "raw_research": None,
+                "research_sources": [],
+                "prepared_segments": [],
+                "doc_count": 0,
+                "kb_miss": False,
+                "kb_build_attempted": False,
+            }
+        return {
+            **base,
             "next_agent": None,
             "delegation_reasoning": None,
         }
