@@ -1,0 +1,90 @@
+name: Deploy (stage) to GCE
+
+# Pushes to `stage` run tests, build/push the API image to Artifact Registry,
+# then deploy on the GCE VM via docker compose over an IAP SSH tunnel.
+# Auth uses keyless Workload Identity Federation (no JSON keys).
+on:
+  push:
+    branches: [stage]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-stage
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # required for Workload Identity Federation
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies (with dev extras)
+        run: uv sync --extra dev
+      - name: Lint
+        run: uv run ruff check .
+      - name: Unit tests
+        run: uv run pytest tests/unit -q
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.AR_REPO }}/${{ vars.IMAGE_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.DEPLOY_SA_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push image
+        run: |
+          docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:stage" .
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:stage"
+
+      - name: Render production .env
+        env:
+          DOTENV_STAGE: ${{ secrets.DOTENV_STAGE }}
+        run: |
+          printf '%s\n' "$DOTENV_STAGE" > deploy.env
+          printf 'API_IMAGE=%s\n' "$IMAGE:${{ github.sha }}" >> deploy.env
+
+      - name: Ship compose + env to the VM
+        run: |
+          gcloud compute ssh "${{ vars.GCE_INSTANCE }}" \
+            --zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet \
+            --command "mkdir -p ~/app"
+          gcloud compute scp --zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet \
+            docker-compose.prod.yml \
+            "${{ vars.GCE_INSTANCE }}:~/app/docker-compose.prod.yml"
+          gcloud compute scp --zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet \
+            deploy.env \
+            "${{ vars.GCE_INSTANCE }}:~/app/.env"
+
+      - name: Pull and (re)start on the VM
+        run: |
+          gcloud compute ssh "${{ vars.GCE_INSTANCE }}" \
+            --zone "${{ vars.GCP_ZONE }}" --tunnel-through-iap --quiet \
+            --command "set -euo pipefail
+            cd ~/app
+            gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d
+            docker image prune -f || true"

@@ -1,0 +1,42 @@
+# Production stack for the GCE VM. The API image is built/pushed by CI and
+# pulled here; Postgres (pgvector) runs alongside it on the same VM. Redis is
+# external (Redis Cloud), configured via the .env shipped next to this file.
+#
+# Variable substitution (${...}) and the api `env_file` both read ~/app/.env,
+# which CI renders from the DOTENV_STAGE secret and appends API_IMAGE to.
+name: travel-guide
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-postgres}
+      POSTGRES_DB: ${DATABASE_NAME:-autonomous_travel_guide_db}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Point the app at the Postgres container regardless of .env contents.
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      PGVECTOR_ENABLED: "true"
+    entrypoint: ["bash", "scripts/docker-entrypoint.sh"]
+    ports:
+      - "80:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
