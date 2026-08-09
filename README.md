@@ -1,20 +1,29 @@
-# Aautonomous Travel Guide System
+# Autonomous Travel Guide
 
-Production-oriented FastAPI + LangGraph backend structured with Clean Architecture and vertical modules.  
-The system provides authenticated chat sessions, agent orchestration, optional human-in-the-loop approval, and pluggable tools (built-in + MCP).
+Production-oriented FastAPI + LangGraph backend that **plans personalised trips** and **builds destination knowledge bases** on demand. Structured with Clean Architecture and vertical modules.
 
-> **Full project documentation lives in [`docs/`](./docs/README.md)** — architecture, request flow, agent orchestration internals, API reference, configuration, data model, tools, deployment, and testing.
+> **Full project documentation lives in [`docs/`](./docs/README.md)** — onboarding, travel planner, knowledge builder, architecture, API reference, configuration, deployment, and testing.
 >
 > **New here?** Start with [`docs/onboarding.md`](./docs/onboarding.md) — the comprehensive new‑developer guide.
 
 ## What This Project Includes
 
+### Travel guide (primary — `TRAVEL_PLANNER_ENABLED=true`)
+
+- **Travel Planner** graph — collects trip requirements (HITL), runs specialists (city expert with RAG, hotels, flights/logistics, food), synthesises a day-by-day itinerary
+- **Knowledge Builder** graph — on KB miss, asks user approval → Jina deep research → LLM dedup → pgvector ingest; on reject, web-search fallback with nothing stored
+- **Destination-scoped RAG** via pgvector (`build_destination_retriever`) with Tavily web-search fallback
+- **`kb_destinations`** table tracking per-city indexing status (`building` / `ready` / `failed`)
+
+### Platform (shared infrastructure)
+
 - FastAPI API under `/api/v1` with auth, user, session, chat, and run-state endpoints
-- LangGraph-based orchestrator in `app/modules/agent_orchestration`
-- SQLAlchemy async persistence (PostgreSQL), Alembic migrations, Redis, JWT auth
+- LangGraph orchestrator in `app/modules/agent_orchestration` (travel master graph or template supervisor graph)
+- SQLAlchemy async persistence (PostgreSQL + pgvector), Alembic migrations, Redis, JWT auth
 - Optional Celery worker path for deferred/background graph execution
 - MCP tool bootstrap at app startup with tool collision protection
-- Unit/integration test suite and CI-friendly local scripts
+- Unit/integration test suite (including travel graph e2e tests with fakes)
+- **Stage deployment** to GCE via GitHub Actions (push to `stage` branch) — see [`docs/deployment.md`](./docs/deployment.md)
 
 ## Architecture Overview
 
@@ -166,6 +175,7 @@ This project intentionally prefers `.env` values over stale process-level enviro
 - **LLM:** `DEFAULT_LLM_PROVIDER`, `DEFAULT_MODEL_NAME`, provider API keys
 - **Agent limits:** `AGENT_MAX_CONTEXT_TOKENS`, `MAX_TOOL_OUTPUT_CHARS`, memory-summary vars
 - **Research:** `TAVILY_API_KEY`, `PGVECTOR_ENABLED`, embedding/vector vars
+- **Travel guide:** `TRAVEL_PLANNER_ENABLED`, `JINA_API_KEY`, `INGESTION_SERVICE_URL`, specialist model overrides
 - **MCP:** `MCP_SERVERS` (JSON array of server specs)
 
 ## MCP Integration

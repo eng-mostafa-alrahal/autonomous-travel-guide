@@ -1,6 +1,6 @@
 # Documentation
 
-This directory is the canonical reference for how the **Aautonomous Travel Guide** project is organised, how requests flow through it, and how to run / extend it.
+This directory is the canonical reference for how the **Autonomous Travel Guide** project is organised, how requests flow through it, and how to run / extend it.
 
 The docs are intentionally **high level**. For file-by-file detail, read the source alongside the matching doc page.
 
@@ -19,15 +19,17 @@ The docs are intentionally **high level**. For file-by-file detail, read the sou
 | Topic | Start here |
 |---|---|
 | **Joining the project for the first time** | **[`onboarding.md`](./onboarding.md)** |
-| Install + run a first chat | [`getting-started.md`](./getting-started.md) |
+| Install + run a first trip plan | [`getting-started.md`](./getting-started.md) |
+| **Travel Planner** (requirements, specialists, itinerary) | [`travel-planner.md`](./travel-planner.md) |
+| **Knowledge Builder** (deep research, RAG ingest, HITL) | [`knowledge-builder.md`](./knowledge-builder.md) |
 | How the code is layered | [`architecture.md`](./architecture.md) |
 | What happens on `POST /chat/` | [`request-flow.md`](./request-flow.md) |
-| LangGraph supervisor / researcher / workspace | [`agent-orchestration.md`](./agent-orchestration.md) |
+| LangGraph graphs (travel mode + template supervisor) | [`agent-orchestration.md`](./agent-orchestration.md) |
 | All HTTP endpoints + SSE protocol | [`api-reference.md`](./api-reference.md) |
 | All environment variables | [`configuration.md`](./configuration.md) |
-| Database schema + checkpointer | [`data-model.md`](./data-model.md) |
+| Database schema + `kb_destinations` + checkpointer | [`data-model.md`](./data-model.md) |
 | Built-in tools + MCP tools | [`tools.md`](./tools.md) |
-| Docker, Celery, production | [`deployment.md`](./deployment.md) |
+| Docker, stage GCE deploy, Celery, production | [`deployment.md`](./deployment.md) |
 | Tests and how to run them | [`testing.md`](./testing.md) |
 | Deep-dive: MCP wiring | [`architecture/mcp_integration.md`](./architecture/mcp_integration.md) |
 
@@ -36,11 +38,12 @@ The docs are intentionally **high level**. For file-by-file detail, read the sou
 If this is your first time in the repo, read in this order:
 
 1. [`onboarding.md`](./onboarding.md) — mental model, setup, guided tour, recipes.
-2. [`getting-started.md`](./getting-started.md) — reference for the install/first‑chat commands.
-3. [`architecture.md`](./architecture.md) — full layering diagrams and the dependency rule.
-4. [`request-flow.md`](./request-flow.md) — one request end‑to‑end.
-5. [`agent-orchestration.md`](./agent-orchestration.md) — LangGraph internals.
-6. Pick any topic from the table above.
+2. [`getting-started.md`](./getting-started.md) — reference for install and your first trip plan.
+3. [`travel-planner.md`](./travel-planner.md) + [`knowledge-builder.md`](./knowledge-builder.md) — the two core graphs.
+4. [`architecture.md`](./architecture.md) — full layering diagrams and the dependency rule.
+5. [`request-flow.md`](./request-flow.md) — one request end‑to‑end.
+6. [`agent-orchestration.md`](./agent-orchestration.md) — LangGraph internals (travel + template modes).
+7. Pick any topic from the table above.
 
 ## Conventions
 

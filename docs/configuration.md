@@ -113,14 +113,25 @@ These drive the travel-planner and knowledge-builder graphs.
 
 | Var | Default | Notes |
 |---|---|---|
-| `INGESTION_SERVICE_URL` | `` | Base URL of the external RAG Document Processor. **Leave empty to use the local pgvector ingestion fallback.** |
-| `INGESTION_SERVICE_API_KEY` | `` | The `rag_...` client key, sent as the `X-API-Key` header. |
+| `INGESTION_SERVICE_URL` | `` | Base URL of the external RAG Document Processor (no trailing slash, no `/api/v1`). **Leave empty to use the local pgvector ingestion fallback.** |
+| `INGESTION_SERVICE_API_KEY` | `` | The `rag_...` client key, sent as the `X-API-Key` header. Issued by the service operator. |
 | `INGESTION_SERVICE_TIMEOUT_S` | `60` | HTTP client timeout per call. |
 | `INGESTION_POLL_TIMEOUT_S` | `300` | Max time to poll a job before giving up. |
 | `INGESTION_POLL_INTERVAL_S` | `2.0` | Delay between job-status polls. |
+| `INGESTION_EMBEDDER_PROVIDER` | `openai` | `openai` \| `jina`. Pinned on every request so the service can't silently fall back to a different embedder. |
+| `INGESTION_MACRO_SPLITTER` | `recursive` | `recursive` \| `semantic` \| `token_aware`. Affects chunking only, not the vector space. |
+| `INGESTION_MAX_CONCURRENCY` | `4` | Knowledge segments are submitted as independent jobs; this bounds how many are in flight. |
 | `AGENT_GRAPH_TIMEOUT_S` | `900` | Overall budget for a single agent graph run (deep research can be slow). |
 
-When `INGESTION_SERVICE_URL` is empty the knowledge builder chunks and embeds locally into pgvector. When it is set, the builder submits text to the external service, polls the job, then upserts the returned vectors into pgvector **without re-embedding** — so the service must embed with the same `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` used at query time.
+When `INGESTION_SERVICE_URL` is empty the knowledge builder chunks and embeds locally into pgvector. When it is set, the builder submits text to the external service, polls the job, then upserts the returned vectors into pgvector **without re-embedding**.
+
+> **Consistency is enforced, not assumed.** The adapter pins `embedder_provider`, `embedding_model`, and `embedding_dimensions` on every submit, and rejects any returned chunk whose vector width differs from `EMBEDDING_DIMENSIONS` — storing mismatched vectors would leave documents permanently unsearchable by the city expert. Note that the service's `late_chunking` pipeline always uses Jina, so it is **not** compatible with OpenAI query-time embeddings; the adapter always requests `chunk_then_embed`.
+
+Verify connectivity, the key, and vector width with:
+
+```bash
+uv run python scripts/check_ingestion_service.py
+```
 
 ## Observability
 

@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     INGESTION_SERVICE_TIMEOUT_S: int = 60
     INGESTION_POLL_TIMEOUT_S: int = 300
     INGESTION_POLL_INTERVAL_S: float = 2.0
+    # Must stay consistent with the query-time embedder in build_pgvector_store().
+    INGESTION_EMBEDDER_PROVIDER: Literal["openai", "jina"] = "openai"
+    INGESTION_MACRO_SPLITTER: Literal["recursive", "semantic", "token_aware"] = "recursive"
+    # Segments are submitted as independent jobs; this bounds them in flight.
+    INGESTION_MAX_CONCURRENCY: int = 4
 
     # Overall budget for a single agent graph run (deep research can be slow).
     AGENT_GRAPH_TIMEOUT_S: int = 900

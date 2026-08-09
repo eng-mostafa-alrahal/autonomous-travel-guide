@@ -55,7 +55,7 @@ Clean-architecture boundaries are preserved: the graph (infrastructure) depends 
 ### Ingestion (`IIngestionService`)
 - Port: `app/modules/agent_orchestration/application/ports/ingestion_port.py` — `ingest(segments, destination) -> IngestionResult`.
 - Adapters in `app/infrastructure/ingestion/`:
-  - `LocalPgVectorIngestionAdapter` (**default**): chunks + embeds segments locally and `add_documents()` into pgvector with metadata `{destination_key, city, country, topic, source}`.
+  - `LocalPgVectorIngestionAdapter` (fallback when no URL is set): chunks + embeds segments locally and `add_documents()` into pgvector with metadata `{destination_key, city, country, topic, source}`.
   - `HttpIngestionAdapter`: integrates the external **RAG Document Processor** (see below). It does **not** re-embed — the service returns vectors, which are upserted into pgvector via `PGVector.add_embeddings`.
   - `factory.build_ingestion_service()` picks the adapter based on `INGESTION_SERVICE_URL`.
 
@@ -64,14 +64,24 @@ Clean-architecture boundaries are preserved: the graph (infrastructure) depends 
 
 ## External ingestion service contract (RAG Document Processor)
 
-Used only when `INGESTION_SERVICE_URL` is set. Auth header `X-API-Key: <INGESTION_SERVICE_API_KEY>`. All routes under `/api/v1`.
+**Status: live** on Cloud Run. Used when `INGESTION_SERVICE_URL` is set; otherwise the local fallback runs. Auth header `X-API-Key: <INGESTION_SERVICE_API_KEY>` (key issued by the service operator). All routes under `/api/v1`; interactive schema at `{BASE_URL}/docs`.
 
-1. `POST /ingest/text` `{ texts, embedding_model, embedding_dimensions, embedding_pipeline: "chunk_then_embed", macro_splitter: "recursive" }` -> `{ job_id }`.
-2. Poll `GET /jobs/{job_id}` every `INGESTION_POLL_INTERVAL_S` until `status` in `{completed, failed}`, bounded by `INGESTION_POLL_TIMEOUT_S`.
+Each knowledge segment becomes its own job, so per-topic metadata survives. Jobs run concurrently up to `INGESTION_MAX_CONCURRENCY`.
+
+1. `POST /ingest/text` `{ texts, embedding_pipeline: "chunk_then_embed", macro_splitter, embedder_provider, embedding_model, embedding_dimensions }` -> `{ job_id }`.
+2. Poll `GET /jobs/{job_id}` every `INGESTION_POLL_INTERVAL_S` until `status` in `{completed, failed}`, bounded by `INGESTION_POLL_TIMEOUT_S`. A `failed` status raises with `error_message`.
 3. `GET /jobs/{job_id}/results` -> `{ chunks: [{ index, text, embedding, metadata }] }` (retry on `409 job_results_not_ready`).
-4. Upsert `text + embedding + metadata` into pgvector without re-embedding.
+4. Upsert `text + embedding + metadata` into pgvector via `PGVector.add_embeddings` without re-embedding, adding `{destination_key, city, country, topic, source}`.
 
-**Consistency rule:** the adapter sends `embedding_model = EMBEDDING_MODEL` and `embedding_dimensions = EMBEDDING_DIMENSIONS` so ingested vectors match the city-expert query embeddings. Mismatched models/dims break retrieval.
+**Consistency rule (enforced):** the adapter pins `embedder_provider`, `embedding_model`, and `embedding_dimensions` on every submit rather than relying on server defaults, and **raises if a returned vector's width differs from `EMBEDDING_DIMENSIONS`**. Storing mismatched vectors would make those documents permanently unsearchable by the city expert. The service's `late_chunking` pipeline always uses Jina, so it is incompatible with our OpenAI query-time embedder — the adapter always requests `chunk_then_embed`.
+
+Errors come back as `{detail, code}` and are surfaced with the code attached (e.g. `401` invalid key, `422 invalid_embedding_dimensions` including the allowed min/max). Valid dimension ranges per model: `GET /api/v1/embeddings/dimension-constraints` (our `text-embedding-3-small` allows 256–1536; we use 1536).
+
+Smoke-test the integration end to end (no pgvector writes):
+
+```bash
+uv run python scripts/check_ingestion_service.py
+```
 
 ## Prompts
 
