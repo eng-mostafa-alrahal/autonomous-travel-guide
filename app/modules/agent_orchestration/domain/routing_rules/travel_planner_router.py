@@ -9,7 +9,7 @@ from app.modules.agent_orchestration.domain.states.travel_planner_state import T
 SPECIALISTS: list[str] = ["city_expert", "hotels", "flights_logistics", "food"]
 
 SpecialistRoute = Literal[
-    "city_expert", "hotels", "flights_logistics", "food", "synthesize", "end"
+    "city_expert", "hotels", "flights_logistics", "food", "cluster", "end"
 ]
 
 
@@ -27,7 +27,8 @@ def route_specialist(state: TravelPlannerState) -> SpecialistRoute:
     nxt = state.get("next_specialist")
     if nxt in SPECIALISTS:
         return nxt  # type: ignore[return-value]
-    return "synthesize"
+    # Queue exhausted -> group POIs into days before writing the itinerary.
+    return "cluster"
 
 
 def route_after_city_expert(state: TravelPlannerState) -> Literal["delegate", "end"]:

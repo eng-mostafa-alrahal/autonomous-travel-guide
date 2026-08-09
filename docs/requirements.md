@@ -55,8 +55,28 @@ SaaS features. Specialists are search-then-summarize (no live booking APIs yet).
 | FR-P5 | `city_expert` MUST query a **destination-scoped pgvector retriever** (`build_destination_retriever(destination_key)`) and fall back to `web_search` when retrieval is empty or the KB is unavailable. |
 | FR-P6 | On a KB miss, `city_expert` MUST set `kb_miss = true` and a canonical `destination_key` in state so the master graph can trigger the Knowledge Builder. |
 | FR-P7 | `hotels`, `flights_logistics`, and `food` are search-then-summarize specialists sharing one parameterized prompt (`travel_specialist`, parameter `role`). `flights_logistics` also covers local transport and day-routing, and MUST use `LOGISTICIAN_MODEL` when set. |
-| FR-P8 | `synthesize_itinerary` MUST compose the final day-by-day plan from all `specialist_outputs`, respecting budget and `num_days`, and write it to `itinerary` and as the final `AIMessage`. |
+| FR-P8 | `synthesize_itinerary` MUST compose the final day-by-day plan from all `specialist_outputs`, respecting budget and `num_days`, and write it to `itinerary` and as the final `AIMessage`. It MUST group geographically-nearby POIs into the same day using their coordinates. |
 | FR-P9 | Specialist results MUST merge into `specialist_outputs` via a state reducer (safe for future parallel execution). |
+
+#### 3.1.1 Structured specialist outputs ✅
+
+| ID | Requirement |
+|----|-------------|
+| FR-O1 | Each specialist MUST emit a **validated Pydantic list**, not free text: `city_expert`/`food` → `POI`, `hotels` → `HotelOption`, `flights_logistics` → `FlightOption`. Schemas live in `domain/schemas/travel_plan.py` (pure Pydantic, no framework imports). |
+| FR-O2 | `POI` MUST carry `name`, `category`, optional `lat`/`lng`, `estimated_duration_min`, `notes`. `HotelOption`: `name`, `area`, optional `nightly_rate_usd`, `lat`/`lng`, `notes`. `FlightOption`: `summary`, optional `price_usd`, `details`. |
+| FR-O3 | Coordinates are LLM best-estimates (approximate, `null` when unknown) — no geocoding network call on the planning hot path, so tests stay offline. |
+| FR-O4 | Schemas MUST tolerate LLM output variance: accept common wrapper aliases (`pois`/`places`/`hotels`/`flights`/…) and ignore extra fields. |
+| FR-O5 | `specialist_outputs[role]` stores the JSON-serialised item list (`model_dump()["items"]`); the itinerary node renders them as readable bullets for the itinerary prompt. |
+
+#### 3.1.2 Spatial day clustering ✅
+
+| ID | Requirement |
+|----|-------------|
+| FR-C1 | After all specialists complete, a **deterministic, non-LLM** `spatial_cluster` node MUST group the geo-located POIs (from `city_expert` + `food`, deduped by name) into `num_days` day clusters before itinerary synthesis. |
+| FR-C2 | Clustering MUST anchor on the first hotel option that has coordinates, falling back to the POI centroid when none is located. POIs without coordinates MUST NOT be dropped (distributed round-robin). |
+| FR-C3 | The algorithm MUST be deterministic: identical inputs always produce identical clusters (farthest-first assignment to nearest day centroid, then nearest-neighbour ordering from the anchor). |
+| FR-C4 | Each day MUST include travel hops between consecutive stops (and from the anchor to the first stop): straight-line `haversine_km` distance + a heuristic `travel_minutes` (walk ≤ 1.5 km @ 4.5 km/h, else transit @ 22 km/h + 12 min overhead, rounded to 5 min). |
+| FR-C5 | The itinerary prompt MUST receive the clusters as a "suggested day grouping" backbone it can refine, not as a rigid constraint. |
 
 ### 3.2 Knowledge Builder graph ✅
 
@@ -271,7 +291,8 @@ Tracked as Stages 5–10 in the active plan; summarized here for completeness.
 | Stage | Requirement summary |
 |-------|--------------------|
 | ~~5 — Phase SSE~~ | ✅ **Done** — see §3.5. |
-| 6 — Structured outputs | Specialists return validated Pydantic objects (`POI` with lat/lng/category/duration, `HotelOption`, `FlightOption`, `ItineraryDay`) instead of free text. |
+| ~~6 — Structured outputs~~ | ✅ **Done** — see §3.1.1. (`ItineraryDay` typed output was deferred to keep the final answer as markdown.) |
+| ~~7 — Spatial clustering~~ | ✅ **Done** — see §3.1.2. Deterministic haversine day-clustering + travel-time heuristics feed the itinerary. |
 | 7 — Spatial clustering | Deterministic (non-LLM) haversine day-clustering of POIs anchored on the chosen hotel, feeding the itinerary prompt. |
 | 8 — Parallel specialists | Specialists fan out concurrently via LangGraph `Send` with a join node; the sequential queue remains switchable for CI determinism. |
 | 9 — Persistence & revision | Itineraries persist in a new table (Alembic migration); follow-up revision turns re-run only affected specialists/days. |

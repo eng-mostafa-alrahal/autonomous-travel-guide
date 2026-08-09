@@ -22,7 +22,8 @@ class TravelRootState(BaseAgentState):
     missing_slots: list[str]
     pending_specialists: list[str]
     next_specialist: str | None
-    specialist_outputs: Annotated[dict[str, str], merge_specialist_outputs]
+    specialist_outputs: Annotated[dict[str, list[dict[str, Any]]], merge_specialist_outputs]
+    clusters: list[dict[str, Any]]
     itinerary: str | None
     # ── knowledge builder ───────────────────────────────────────
     destination_key: str

@@ -32,6 +32,9 @@ from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.t
     ask_requirements,
     make_collect_requirements_node,
 )
+from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.travel_planner.nodes.spatial import (  # noqa: E501
+    make_spatial_cluster_node,
+)
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.travel_planner.nodes.specialists import (  # noqa: E501
     RetrieverProvider,
     make_city_expert_node,
@@ -107,6 +110,7 @@ def build_travel_planner_graph(
             "food", llm, prompt_provider=prompt_provider, web_search_tool=web_search_tool
         ),
     )
+    graph.add_node("spatial_cluster", make_spatial_cluster_node())
     graph.add_node(
         "synthesize_itinerary",
         make_itinerary_node(llm, prompt_provider=prompt_provider),
@@ -127,7 +131,7 @@ def build_travel_planner_graph(
             "hotels": "hotels",
             "flights_logistics": "flights_logistics",
             "food": "food",
-            "synthesize": "synthesize_itinerary",
+            "cluster": "spatial_cluster",
             "end": END,
         },
     )
@@ -139,5 +143,8 @@ def build_travel_planner_graph(
     graph.add_edge("hotels", "delegate")
     graph.add_edge("flights_logistics", "delegate")
     graph.add_edge("food", "delegate")
+    # Once every specialist has run, delegate routes here to group POIs by day
+    # before the itinerary is written.
+    graph.add_edge("spatial_cluster", "synthesize_itinerary")
     graph.add_edge("synthesize_itinerary", END)
     return graph

@@ -56,8 +56,10 @@ def test_route_specialist_returns_next():
     assert route_specialist({"next_specialist": "hotels"}) == "hotels"  # type: ignore[arg-type]
 
 
-def test_route_specialist_synthesizes_when_done():
-    assert route_specialist({"next_specialist": None}) == "synthesize"  # type: ignore[arg-type]
+def test_route_specialist_clusters_when_done():
+    # Once the specialist queue is empty, delegate routes to spatial clustering
+    # before itinerary synthesis.
+    assert route_specialist({"next_specialist": None}) == "cluster"  # type: ignore[arg-type]
 
 
 def test_merge_specialist_outputs():

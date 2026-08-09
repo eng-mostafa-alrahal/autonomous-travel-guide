@@ -8,9 +8,14 @@ from app.modules.agent_orchestration.domain.states.base_state import BaseAgentSt
 
 
 def merge_specialist_outputs(
-    existing: dict[str, str] | None, new: dict[str, str] | None
-) -> dict[str, str]:
-    """Reducer that accumulates per-specialist outputs as they complete."""
+    existing: dict[str, list[dict[str, Any]]] | None,
+    new: dict[str, list[dict[str, Any]]] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Reducer that accumulates per-specialist structured outputs as they complete.
+
+    Each value is a validated, JSON-serialisable list (``model_dump()`` of the
+    specialist's Pydantic list), not raw text.
+    """
     return {**(existing or {}), **(new or {})}
 
 
@@ -20,7 +25,8 @@ class TravelPlannerState(BaseAgentState):
     missing_slots: list[str]
     pending_specialists: list[str]
     next_specialist: str | None
-    specialist_outputs: Annotated[dict[str, str], merge_specialist_outputs]
+    specialist_outputs: Annotated[dict[str, list[dict[str, Any]]], merge_specialist_outputs]
+    clusters: list[dict[str, Any]]
     itinerary: str | None
     # Progress reporting (streamed as `stream_detail=phases` SSE events).
     phase: str | None

@@ -229,6 +229,7 @@ class MainGraphOrchestrator(IAgentOrchestrator):
                 "pending_specialists": [],
                 "next_specialist": None,
                 "specialist_outputs": {},
+                "clusters": [],
                 "itinerary": None,
                 "destination_key": "",
                 "city": None,

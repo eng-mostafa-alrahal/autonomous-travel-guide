@@ -32,6 +32,14 @@ from app.modules.agent_orchestration.domain.schemas.knowledge_prep import (
     KnowledgeSegment,
     PreparedKnowledge,
 )
+from app.modules.agent_orchestration.domain.schemas.travel_plan import (
+    POI,
+    FlightOption,
+    FlightOptionList,
+    HotelOption,
+    HotelOptionList,
+    POIList,
+)
 from app.modules.agent_orchestration.domain.schemas.trip_requirements import TripRequirements
 
 
@@ -51,6 +59,18 @@ class _FakeStructured:
         if self._schema is PreparedKnowledge:
             return PreparedKnowledge(
                 segments=[KnowledgeSegment(topic="history", content="Atlantis lore.")]
+            )
+        if self._schema is POIList:
+            return POIList(
+                items=[POI(name="Poseidon Temple", category="landmark", lat=36.3, lng=25.4)]
+            )
+        if self._schema is HotelOptionList:
+            return HotelOptionList(
+                items=[HotelOption(name="Coral Suites", area="Harbor", nightly_rate_usd=180)]
+            )
+        if self._schema is FlightOptionList:
+            return FlightOptionList(
+                items=[FlightOption(summary="Ferry + flight via Athens", price_usd=320)]
             )
         return self._schema()
 

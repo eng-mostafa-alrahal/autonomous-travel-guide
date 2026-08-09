@@ -1,4 +1,9 @@
-"""Specialist nodes for the travel planner (hotels, flights/logistics, food, city expert)."""
+"""Specialist nodes for the travel planner (hotels, flights/logistics, food, city expert).
+
+Each specialist returns a validated, JSON-serialisable list (a Pydantic list
+schema's ``model_dump()["items"]``) into ``specialist_outputs[role]`` — not free
+text — so downstream stages can use the lat/lng and cost fields.
+"""
 
 from __future__ import annotations
 
@@ -11,15 +16,23 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import BaseTool
+from pydantic import BaseModel
 
+from app.infrastructure.llm_gateways.structured_output import with_pydantic_output
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
 from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.kb_destination import build_destination_key
 from app.modules.agent_orchestration.domain.prompts.context import PromptContext
 from app.modules.agent_orchestration.domain.prompts.intent import PromptIntent
+from app.modules.agent_orchestration.domain.prompts.schema_compact import compact_schema_for_llm
+from app.modules.agent_orchestration.domain.schemas.travel_plan import (
+    FlightOptionList,
+    HotelOptionList,
+    POIList,
+)
 from app.modules.agent_orchestration.domain.states.travel_planner_state import TravelPlannerState
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.prompt_trace_config import (
-    trace_run_config_from_metadata,
+    trace_config_for_structured_pair,
 )
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.travel_planner.nodes.helpers import (  # noqa: E501
     destination_label,
@@ -37,7 +50,41 @@ _QUERY_TEMPLATES: dict[str, str] = {
     "food": "best restaurants, street food, and local cuisine to try in {dest}",
 }
 
+# Which structured list each specialist role produces.
+_OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
+    "hotels": HotelOptionList,
+    "flights_logistics": FlightOptionList,
+    "food": POIList,
+}
+
 RetrieverProvider = Callable[[str | None], BaseRetriever | None]
+
+
+async def _structured_items(
+    llm: BaseChatModel,
+    prompt_provider: IPromptProvider,
+    intent: PromptIntent,
+    schema: type[BaseModel],
+    context: PromptContext,
+    human: str,
+) -> list[dict[str, Any]]:
+    """Run a structured-output call and return the validated ``items`` list."""
+    structured_llm = with_pydantic_output(llm, schema)
+    system_rendered = prompt_provider.resolve_prompt(
+        PromptIntent.STRUCTURED_OUTPUT_SYSTEM, PromptContext()
+    )
+    human_rendered = prompt_provider.resolve_prompt(intent, context)
+    trace_cfg = trace_config_for_structured_pair(
+        system_rendered.metadata, human_rendered.metadata
+    )
+    result = await structured_llm.ainvoke(
+        [
+            SystemMessage(content=system_rendered.content),
+            HumanMessage(content=human_rendered.content),
+        ],
+        config=trace_cfg,
+    )
+    return [item.model_dump() for item in getattr(result, "items", [])]
 
 
 def make_specialist_node(
@@ -47,6 +94,8 @@ def make_specialist_node(
     prompt_provider: IPromptProvider,
     web_search_tool: BaseTool | None,
 ):
+    schema = _OUTPUT_SCHEMAS.get(role, POIList)
+
     async def specialist(state: TravelPlannerState) -> dict[str, Any]:
         requirements = state.get("requirements", {})
         dest = destination_label(requirements)
@@ -55,22 +104,20 @@ def make_specialist_node(
         query = template.format(dest=dest, budget=budget, role=role)
 
         evidence = await run_web_search(web_search_tool, query)
-        rendered = prompt_provider.resolve_prompt(
+        items = await _structured_items(
+            llm,
+            prompt_provider,
             PromptIntent.TRAVEL_SPECIALIST,
+            schema,
             PromptContext(
                 role=role,
                 requirements_text=format_requirements(requirements),
                 retrieved_evidence=evidence[:_EVIDENCE_CAP],
+                compact_schema=compact_schema_for_llm(schema),
             ),
+            "Provide your recommendations.",
         )
-        response = await llm.ainvoke(
-            [
-                SystemMessage(content=rendered.content),
-                HumanMessage(content="Provide your recommendations."),
-            ],
-            config=trace_run_config_from_metadata(rendered.metadata),
-        )
-        return {"specialist_outputs": {role: str(response.content)}}
+        return {"specialist_outputs": {role: items}}
 
     return specialist
 
@@ -135,21 +182,19 @@ def make_city_expert_node(
                 web_search_tool, f"travel guide culture history attractions {dest}"
             )
 
-        rendered = prompt_provider.resolve_prompt(
+        items = await _structured_items(
+            llm,
+            prompt_provider,
             PromptIntent.TRAVEL_CITY_EXPERT,
+            POIList,
             PromptContext(
                 destination=dest,
                 requirements_text=format_requirements(requirements),
                 retrieved_evidence=evidence[:_EVIDENCE_CAP],
+                compact_schema=compact_schema_for_llm(POIList),
             ),
+            "Share the key local insights.",
         )
-        response = await llm.ainvoke(
-            [
-                SystemMessage(content=rendered.content),
-                HumanMessage(content="Share the key local insights."),
-            ],
-            config=trace_run_config_from_metadata(rendered.metadata),
-        )
-        return {"specialist_outputs": {"city_expert": str(response.content)}}
+        return {"specialist_outputs": {"city_expert": items}}
 
     return city_expert

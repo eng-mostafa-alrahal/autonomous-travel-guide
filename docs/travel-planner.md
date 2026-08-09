@@ -18,7 +18,8 @@ flowchart TD
     Hotels --> Delegate
     Flights --> Delegate
     Food --> Delegate
-    Delegate -->|queue empty| Synth[synthesize_itinerary]
+    Delegate -->|queue empty| Cluster[spatial_cluster - group POIs by day]
+    Cluster --> Synth[synthesize_itinerary]
     Synth --> EndNode([END])
 ```
 
@@ -50,7 +51,8 @@ The **supervisor** is split into two responsibilities that the plan merged into 
 | `missing_slots` | `list[str]` | What's still needed. |
 | `pending_specialists` | `list[str]` | Delegation queue. |
 | `next_specialist` | `str \| None` | Current routing target. |
-| `specialist_outputs` | `dict[str, str]` | Per-specialist results (merged via reducer). |
+| `specialist_outputs` | `dict[str, list[dict]]` | Per-specialist **structured** results (validated Pydantic items, JSON-serialised), merged via reducer. |
+| `clusters` | `list[dict]` | Deterministic per-day POI groupings (`DayCluster` dumps) from `spatial_cluster`. |
 | `itinerary` | `str \| None` | Final plan. |
 | `destination_key` | `str` | Canonical KB key set by city_expert on a miss (cross-graph). |
 | `city` / `country` | `str \| None` | Destination handed to the Knowledge Builder (cross-graph). |
@@ -79,9 +81,31 @@ Because progress originates *inside* the planner subgraph, the orchestrator stre
 ## Specialists
 
 - **city_expert** — builds a destination-scoped pgvector retriever (`build_destination_retriever(destination_key)`), queries the KB, and falls back to `web_search` when the KB returns nothing. (KB-miss auto-trigger of the Knowledge Builder is wired in **Stage 3**.)
-- **hotels** / **flights_logistics** / **food** — search-then-summarize specialists driven by a shared parameterized prompt. `flights_logistics` also covers local transport / day-routing and uses `LOGISTICIAN_MODEL` when set.
+- **hotels** / **flights_logistics** / **food** — search-then-structure specialists driven by a shared parameterized prompt. `flights_logistics` also covers local transport / day-routing and uses `LOGISTICIAN_MODEL` when set.
 
-All specialists are search-then-summarize for now (no real booking APIs). They call `web_search` directly and let the LLM synthesize recommendations from the results.
+All specialists produce **structured output** (Stage 6): a validated Pydantic list rather than prose, stored in `specialist_outputs[role]` as `model_dump()["items"]`. Schemas live in `app/modules/agent_orchestration/domain/schemas/travel_plan.py`:
+
+| Specialist | Schema | Item fields |
+|-----------|--------|-------------|
+| `city_expert` | `POIList` | `name`, `category`, `lat?`, `lng?`, `estimated_duration_min?`, `notes` |
+| `hotels` | `HotelOptionList` | `name`, `area`, `nightly_rate_usd?`, `lat?`, `lng?`, `notes` |
+| `flights_logistics` | `FlightOptionList` | `summary`, `price_usd?`, `details` |
+| `food` | `POIList` (category = restaurant/food) | same as `city_expert` |
+
+Coordinates are **LLM best-estimates** (Stage 6 decision): approximate lat/lng from the model's knowledge, `null` when unknown — no geocoding network dependency. That's accurate enough for the day-clustering heuristic (Stage 7) and keeps tests offline. The schemas accept common LLM wrapper variants (`pois`/`places`/`attractions`, `hotels`/`options`, `flights`/`routes`) and ignore extra fields, so real-model output validates robustly.
+
+The itinerary node renders these lists as compact bullets (name + `[category, (lat, lng), ~$price, ~N min] — note`) for the `travel_itinerary` prompt.
+
+## Spatial day clustering (Stage 7)
+
+After all specialists run, `delegate` routes to the deterministic **`spatial_cluster`** node (no LLM) before synthesis. It groups the geo-located POIs into `num_days` coherent days so the itinerary doesn't zig-zag across the city.
+
+- **Inputs:** POIs from `city_expert` + `food` (deduped by name — the same place can surface in both), and an **anchor** = the first hotel option that has coordinates (falls back to the POI centroid when no hotel is located).
+- **Algorithm** (`domain/clustering.py`, pure + offline): farthest-first assignment of POIs to the nearest day's centroid (so outliers spread across days), then a nearest-neighbour ordering of each day's stops starting from the anchor. Coordinate-less POIs are distributed round-robin so nothing is dropped.
+- **Travel hops** (`domain/geo.py`): each consecutive pair gets a straight-line `haversine_km` distance and a heuristic `travel_minutes` (walk ≤ 1.5 km at 4.5 km/h, else transit at 22 km/h + 12 min overhead, rounded to 5-minute steps). Approximate by design — the coordinates are LLM estimates.
+- **Output:** `clusters: list[DayCluster]` (`{day, anchor_name, stops[], legs[]}`). The itinerary prompt receives this as a "Suggested day grouping" backbone and may reorder within a day or move a stop if it improves flow.
+
+Because it's deterministic, the same specialist outputs always yield the same grouping — which is what makes it unit-testable without an LLM.
 
 ## Prompts
 
