@@ -56,6 +56,25 @@ The **supervisor** is split into two responsibilities that the plan merged into 
 | `city` / `country` | `str \| None` | Destination handed to the Knowledge Builder (cross-graph). |
 | `kb_miss` | `bool` | City_expert found no KB data and requests a build. |
 | `kb_build_attempted` | `bool` | A build was already attempted this run (set by the master after the builder). |
+| `phase` | `str \| None` | Coarse progress phase (see below). |
+| `phase_status` | `str \| None` | User-facing progress line streamed by `stream_detail=phases`. |
+
+## Progress reporting
+
+Nodes attach a `phase` + `phase_status` to their state updates; the SSE layer turns changes into `{"phase", "status"}` events (see [API reference](./api-reference.md#post-chatstream)). Phase constants and status-line builders live in `app/modules/agent_orchestration/domain/phases.py` — pure domain, no framework imports.
+
+**A node announces the work that comes next.** LangGraph publishes a node's updates only *after* it returns, so announcing what a node just did would report every step too late. The cheap nodes therefore carry the announcements standing in front of the slow ones:
+
+| Node | Phase | Announces |
+|------|-------|-----------|
+| `travel_root` (master) | `requirements` | Run started. |
+| `collect_requirements` | `requirements` / `planning` | Which slots are still missing, or that specialists are starting. |
+| `ask_requirements` | `requirements` | Answer received, re-checking details. |
+| `delegate` | `planning` / `itinerary` | The specialist about to run, or the itinerary write-up. |
+| `city_expert` (KB miss) | `knowledge_build` | A knowledge build is about to be proposed. |
+| `synthesize_itinerary` | `done` | Itinerary finished. |
+
+Because progress originates *inside* the planner subgraph, the orchestrator streams with `subgraphs=True`. Each `AgentEvent` carries a `namespace` (enclosing subgraph nodes, empty at master level) so `content` / `full` modes can keep emitting master-level events only and avoid duplicating a reply that appears both nested and aggregated.
 
 ## Specialists
 
@@ -112,4 +131,5 @@ This satisfies the requirement: *announce the search and ask for approval; on re
 ## Tests
 
 - `tests/unit/test_travel_master.py` — router logic + master-graph compilation.
-- `tests/unit/test_travel_master_e2e.py` — drives the **compiled** master graph with an in-memory checkpointer and fakes through both full cycles: KB miss → **approve** → ingest → re-plan → itinerary, and KB miss → **reject** → web fallback with nothing stored. This exercises the real `interrupt()`/resume and cross-graph routing without DB/LLM/network.
+- `tests/unit/test_travel_master_e2e.py` — drives the **compiled** master graph with an in-memory checkpointer and fakes through both full cycles: KB miss → **approve** → ingest → re-plan → itinerary, and KB miss → **reject** → web fallback with nothing stored. This exercises the real `interrupt()`/resume and cross-graph routing without DB/LLM/network. A third test asserts the streamed phase order across both subgraphs.
+- `tests/unit/test_phase_streaming.py` — phase status builders, event mapping, and SSE payload shaping.

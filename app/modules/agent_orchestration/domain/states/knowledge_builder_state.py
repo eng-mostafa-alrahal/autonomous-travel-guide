@@ -15,3 +15,6 @@ class KnowledgeBuilderState(BaseAgentState):
     research_sources: list[str]
     prepared_segments: list[dict[str, str]]
     doc_count: int
+    # Progress reporting (streamed as `stream_detail=phases` SSE events).
+    phase: str | None
+    phase_status: str | None

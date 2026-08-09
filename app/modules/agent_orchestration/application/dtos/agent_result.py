@@ -73,6 +73,10 @@ class AgentEvent(BaseModel):
     node: str
     messages: list[AgentMessage] = Field(default_factory=list)
     updates: dict[str, Any] = Field(default_factory=dict)
+    phase: str | None = None
+    phase_status: str | None = None
+    # Enclosing subgraph nodes, outermost first; empty for master-graph nodes.
+    namespace: list[str] = Field(default_factory=list)
 
 
 class AgentTaskSnapshot(BaseModel):

@@ -28,6 +28,7 @@ from app.modules.agent_orchestration.application.ports.ingestion_port import (
 )
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
 from app.modules.agent_orchestration.application.use_cases.kb_status_service import KBStatusService
+from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.routing_rules.knowledge_builder_router import (
     route_after_confirm,
     route_after_ingest,
@@ -85,6 +86,7 @@ def build_knowledge_builder_graph(
     def confirm_build(state: KnowledgeBuilderState) -> dict[str, Any]:
         decision = interrupt(
             {
+                "kind": "kb_build",
                 "message": (
                     f"I don't have a knowledge base for {_where(state)} yet. "
                     "I can research it now, but deep research may take a few minutes. "
@@ -100,10 +102,22 @@ def build_knowledge_builder_graph(
         )
         approved = str(action).lower() in {"approve", "approved", "yes", "accept"}
         updates: dict[str, Any] = {"approved": approved, "human_feedback": str(action)}
-        if not approved:
+        if approved:
+            updates.update(
+                phases.phase_update(
+                    phases.KNOWLEDGE_BUILD,
+                    f"Researching {_where(state)} in depth — this can take a few minutes.",
+                )
+            )
+        else:
             updates["messages"] = [
                 AIMessage(content="No problem — I won't build that knowledge base right now.")
             ]
+            updates.update(
+                phases.phase_update(
+                    phases.PLANNING, "Skipping the knowledge build — using web search instead."
+                )
+            )
         return updates
 
     async def deep_research(state: KnowledgeBuilderState) -> dict[str, Any]:
@@ -127,8 +141,15 @@ def build_knowledge_builder_graph(
                 "messages": [
                     AIMessage(content="The deep research step failed. Please try again later.")
                 ],
+                **phases.phase_update(phases.KNOWLEDGE_BUILD, "Deep research failed."),
             }
-        return {"raw_research": result.content, "research_sources": result.sources}
+        return {
+            "raw_research": result.content,
+            "research_sources": result.sources,
+            **phases.phase_update(
+                phases.KNOWLEDGE_BUILD, "Sorting through the research findings."
+            ),
+        }
 
     async def ingest(state: KnowledgeBuilderState) -> dict[str, Any]:
         segments = [
@@ -156,6 +177,9 @@ def build_knowledge_builder_graph(
                     AIMessage(content="I researched the destination but couldn't store it. "
                               "Please try again later.")
                 ],
+                **phases.phase_update(
+                    phases.KNOWLEDGE_BUILD, "Couldn't store the research in the knowledge base."
+                ),
             }
         await kb_status_service.mark_ready(
             destination_key=state["destination_key"],
@@ -163,7 +187,13 @@ def build_knowledge_builder_graph(
             country=state.get("country"),
             doc_count=result.doc_count,
         )
-        return {"doc_count": result.doc_count}
+        return {
+            "doc_count": result.doc_count,
+            **phases.phase_update(
+                phases.KNOWLEDGE_BUILD,
+                f"Knowledge base ready ({result.doc_count} entries).",
+            ),
+        }
 
     def notify_complete(state: KnowledgeBuilderState) -> dict[str, Any]:
         if state.get("error"):

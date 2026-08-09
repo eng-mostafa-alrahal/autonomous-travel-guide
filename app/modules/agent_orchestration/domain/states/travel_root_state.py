@@ -37,3 +37,6 @@ class TravelRootState(BaseAgentState):
     # ── cross-graph control ─────────────────────────────────────
     kb_miss: bool
     kb_build_attempted: bool
+    # ── progress reporting ──────────────────────────────────────
+    phase: str | None
+    phase_status: str | None

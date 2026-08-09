@@ -22,6 +22,9 @@ class TravelPlannerState(BaseAgentState):
     next_specialist: str | None
     specialist_outputs: Annotated[dict[str, str], merge_specialist_outputs]
     itinerary: str | None
+    # Progress reporting (streamed as `stream_detail=phases` SSE events).
+    phase: str | None
+    phase_status: str | None
     # Cross-graph handoff (knowledge-builder auto-trigger). Also present on
     # KnowledgeBuilderState / TravelRootState so they flow through the master graph.
     destination_key: str

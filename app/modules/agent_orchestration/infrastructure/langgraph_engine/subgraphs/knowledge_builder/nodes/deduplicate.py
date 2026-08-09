@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.infrastructure.llm_gateways.structured_output import with_pydantic_output
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
+from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.prompts.context import PromptContext
 from app.modules.agent_orchestration.domain.prompts.intent import PromptIntent
 from app.modules.agent_orchestration.domain.prompts.schema_compact import compact_schema_for_llm
@@ -67,6 +68,11 @@ def make_deduplicate_node(llm: BaseChatModel, *, prompt_provider: IPromptProvide
             if seg.content.strip()
         ]
         logger.info("knowledge_dedup produced %d segments", len(segments))
-        return {"prepared_segments": segments}
+        return {
+            "prepared_segments": segments,
+            **phases.phase_update(
+                phases.KNOWLEDGE_BUILD, "Storing what I learned in the knowledge base."
+            ),
+        }
 
     return deduplicate

@@ -161,28 +161,62 @@ def to_run_result(
     )
 
 
-def to_agent_events(stream_chunk: Any) -> list[AgentEvent]:
+def namespace_to_nodes(namespace: Any) -> list[str]:
+    """Normalise a LangGraph subgraph namespace to plain node names.
+
+    ``astream(subgraphs=True)`` yields namespaces like ``("planner:9f3c-…",)``;
+    the checkpoint suffix is an implementation detail clients should not see.
+    """
+    if not namespace:
+        return []
+    return [str(part).split(":", 1)[0] for part in namespace]
+
+
+def to_agent_events(stream_chunk: Any, *, namespace: Any = ()) -> list[AgentEvent]:
     """Map one ``astream`` chunk to one event per node in that chunk."""
 
+    nodes = namespace_to_nodes(namespace)
     if not isinstance(stream_chunk, dict):
-        return [AgentEvent(node="unknown", updates={"value": _jsonify(stream_chunk)})]
+        return [
+            AgentEvent(
+                node="unknown",
+                updates={"value": _jsonify(stream_chunk)},
+                namespace=nodes,
+            )
+        ]
 
     events: list[AgentEvent] = []
     for node_name, payload in stream_chunk.items():
         if isinstance(payload, dict):
             messages: list[AgentMessage] = []
             updates: dict[str, Any] = {}
+            phase: str | None = None
+            phase_status: str | None = None
             for key, value in payload.items():
                 if key == "messages" and isinstance(value, list):
                     messages = [to_agent_message(m) for m in value]
+                elif key == "phase":
+                    phase = str(value) if value is not None else None
+                elif key == "phase_status":
+                    phase_status = str(value) if value is not None else None
                 else:
                     updates[key] = _jsonify(value)
-            events.append(AgentEvent(node=str(node_name), messages=messages, updates=updates))
+            events.append(
+                AgentEvent(
+                    node=str(node_name),
+                    messages=messages,
+                    updates=updates,
+                    phase=phase,
+                    phase_status=phase_status,
+                    namespace=nodes,
+                )
+            )
         else:
             events.append(
                 AgentEvent(
                     node=str(node_name),
                     updates={"value": _jsonify(payload)},
+                    namespace=nodes,
                 )
             )
     return events

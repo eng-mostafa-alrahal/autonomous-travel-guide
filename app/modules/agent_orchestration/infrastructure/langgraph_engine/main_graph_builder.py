@@ -221,6 +221,8 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         if get_settings().TRAVEL_PLANNER_ENABLED:
             return {
                 **base,
+                "phase": None,
+                "phase_status": None,
                 "requirements": {},
                 "requirements_complete": False,
                 "missing_slots": [],
@@ -301,8 +303,13 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         graph = self._compile()
         initial_state = self._build_initial_state(user_message, session_id, user_id)
         config = self._config_for(session_id)
-        async for chunk in graph.astream(initial_state, config=config):
-            for event in to_agent_events(chunk):
+        # ``subgraphs=True`` surfaces nodes inside the planner / knowledge-builder
+        # subgraphs, which is where phase progress originates. Consumers that only
+        # want master-level events filter on the (empty) event namespace.
+        async for namespace, chunk in graph.astream(
+            initial_state, config=config, subgraphs=True
+        ):
+            for event in to_agent_events(chunk, namespace=namespace):
                 now = perf_counter()
                 event_count += 1
                 delta_ms = (now - last_event_at) * 1000

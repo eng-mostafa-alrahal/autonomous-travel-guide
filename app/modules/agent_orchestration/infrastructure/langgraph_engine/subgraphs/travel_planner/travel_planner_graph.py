@@ -15,12 +15,16 @@ from langchain_core.tools import BaseTool
 from langgraph.graph import END, StateGraph
 
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
+from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.routing_rules.travel_planner_router import (
     route_after_city_expert,
     route_after_requirements,
     route_specialist,
 )
 from app.modules.agent_orchestration.domain.states.travel_planner_state import TravelPlannerState
+from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.travel_planner.nodes.helpers import (  # noqa: E501
+    destination_label,
+)
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.travel_planner.nodes.itinerary import (  # noqa: E501
     make_itinerary_node,
 )
@@ -52,9 +56,19 @@ def build_travel_planner_graph(
     def delegate(state: TravelPlannerState) -> dict[str, Any]:
         pending = list(state.get("pending_specialists") or [])
         if not pending:
-            return {"next_specialist": None}
+            return {
+                "next_specialist": None,
+                **phases.phase_update(
+                    phases.ITINERARY, "Writing your day-by-day itinerary."
+                ),
+            }
         nxt = pending[0]
-        return {"next_specialist": nxt, "pending_specialists": pending[1:]}
+        destination = destination_label(state.get("requirements") or {})
+        return {
+            "next_specialist": nxt,
+            "pending_specialists": pending[1:],
+            **phases.phase_update(phases.PLANNING, phases.specialist_status(nxt, destination)),
+        }
 
     graph = StateGraph(TravelPlannerState)
     graph.add_node(

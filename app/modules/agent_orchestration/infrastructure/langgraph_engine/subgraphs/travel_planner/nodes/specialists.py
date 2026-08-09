@@ -13,6 +13,7 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import BaseTool
 
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
+from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.kb_destination import build_destination_key
 from app.modules.agent_orchestration.domain.prompts.context import PromptContext
 from app.modules.agent_orchestration.domain.prompts.intent import PromptIntent
@@ -123,6 +124,10 @@ def make_city_expert_node(
                         )
                     )
                 ],
+                **phases.phase_update(
+                    phases.KNOWLEDGE_BUILD,
+                    f"No knowledge base for {dest} yet — asking to run deep research.",
+                ),
             }
 
         if not evidence.strip():

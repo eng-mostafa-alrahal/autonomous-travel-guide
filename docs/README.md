@@ -19,6 +19,7 @@ The docs are intentionally **high level**. For file-by-file detail, read the sou
 | Topic | Start here |
 |---|---|
 | **Joining the project for the first time** | **[`onboarding.md`](./onboarding.md)** |
+| **Full requirements spec** (functional, non-functional, roadmap) | [`requirements.md`](./requirements.md) |
 | Install + run a first trip plan | [`getting-started.md`](./getting-started.md) |
 | **Travel Planner** (requirements, specialists, itinerary) | [`travel-planner.md`](./travel-planner.md) |
 | **Knowledge Builder** (deep research, RAG ingest, HITL) | [`knowledge-builder.md`](./knowledge-builder.md) |

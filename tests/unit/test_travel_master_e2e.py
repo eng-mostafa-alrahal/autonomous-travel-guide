@@ -181,6 +181,44 @@ async def test_kb_miss_approve_replans_and_produces_itinerary():
     assert "city_expert" in final.values["specialist_outputs"]
 
 
+async def test_stream_reports_phase_progress_from_inside_subgraphs():
+    """Phase lines must reach the stream while the slow work is still ahead."""
+    from app.modules.agent_orchestration.infrastructure.langgraph_engine.mappers.state_mapper import (  # noqa: E501
+        to_agent_events,
+    )
+
+    ingest_state = {"ingested": False}
+    app = _build_compiled(ingest_state)
+    config = {"configurable": {"thread_id": "trip-3"}}
+
+    async def collect(graph_input: Any) -> list[tuple[str | None, str]]:
+        seen: list[tuple[str | None, str]] = []
+        async for namespace, chunk in app.astream(graph_input, config, subgraphs=True):
+            for event in to_agent_events(chunk, namespace=namespace):
+                if event.phase_status and (event.phase, event.phase_status) not in seen:
+                    seen.append((event.phase, event.phase_status))
+        return seen
+
+    first_pass = await collect(_initial_state("Plan me 3 days in Atlantis, budget $1500"))
+    statuses = [status for _phase, status in first_pass]
+
+    # Requirements -> specialist announcement -> KB miss, all before the interrupt.
+    assert ("requirements", "Getting started on your trip plan.") in first_pass
+    assert any("bringing in the specialists" in s for s in statuses)
+    assert any("Researching local insights for Atlantis" in s for s in statuses)
+    assert any("asking to run deep research" in s for s in statuses)
+
+    second_pass = await collect(Command(resume={"action": "approve"}))
+    build_statuses = [status for _phase, status in second_pass]
+
+    # The long research/ingest steps announce themselves before they run.
+    assert any("this can take a few minutes" in s for s in build_statuses)
+    assert any("Sorting through the research findings" in s for s in build_statuses)
+    assert any("Knowledge base ready" in s for s in build_statuses)
+    assert any("Re-planning" in s for s in build_statuses)
+    assert ("done", "Your itinerary is ready.") in second_pass
+
+
 async def test_kb_miss_reject_uses_web_fallback_without_storing():
     ingest_state = {"ingested": False}
     app = _build_compiled(ingest_state)

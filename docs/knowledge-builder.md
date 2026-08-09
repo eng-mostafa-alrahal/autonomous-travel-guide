@@ -41,6 +41,7 @@ The graph is **linear with one branch** (approve/reject) — no loops — so the
 | `research_sources` | `list[str]` | Visited URLs / citations. |
 | `prepared_segments` | `list[dict]` | `[{topic, content}]` after dedup. |
 | `doc_count` | `int` | Number of vectors stored. |
+| `phase` / `phase_status` | `str \| None` | Progress reporting (see below). |
 
 (Plus inherited `messages`, `session_id`, `user_id`, `error`, `human_feedback`.)
 
@@ -96,6 +97,20 @@ Stage 1 built the subgraph and all its dependencies as standalone, testable unit
 - `confirm_build`'s `interrupt()` is the approval gate. On **reject**, the builder ends without ingesting (nothing written to the KB) and the Planner falls back to web search.
 - The master is selected by `MainGraphOrchestrator` when `TRAVEL_PLANNER_ENABLED` is true.
 
+## Progress reporting
+
+This graph is where the long silences happen — deep research alone is bounded by `JINA_DEEPSEARCH_TIMEOUT_S` (300 s by default). Every node therefore emits a `phase_status` announcing the step that is **about to** run, streamed to clients as `{"phase":"knowledge_build","status":"…"}` via `stream_detail=phases` ([API reference](./api-reference.md#post-chatstream)):
+
+| Node | Announces |
+|------|-----------|
+| `confirm_build` (approved) | "Researching {destination} in depth — this can take a few minutes." |
+| `confirm_build` (rejected) | Falls back to `planning`: "Skipping the knowledge build — using web search instead." |
+| `deep_research` | "Sorting through the research findings." (or "Deep research failed.") |
+| `deduplicate` | "Storing what I learned in the knowledge base." |
+| `ingest` | "Knowledge base ready (N entries)." (or the storage failure) |
+
 ## Human-in-the-loop
 
 `confirm_build` uses LangGraph `interrupt()`. The run pauses and the API returns `interrupted: true` with an approval request; the client resumes via `POST /api/v1/runs/{thread_id}/resume` with `{ "action": "approve" | "reject" }`. This reuses the existing HITL machinery (`human_review_node` pattern + `Command(resume=...)`).
+
+The interrupt payload is tagged `"kind": "kb_build"` so clients can distinguish it from the planner's `"kind": "requirements"` question and render an approve/reject prompt instead of a text box.

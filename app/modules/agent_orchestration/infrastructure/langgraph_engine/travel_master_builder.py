@@ -21,6 +21,7 @@ from app.modules.agent_orchestration.application.ports.deep_research_port import
 from app.modules.agent_orchestration.application.ports.ingestion_port import IIngestionService
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
 from app.modules.agent_orchestration.application.use_cases.kb_status_service import KBStatusService
+from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.routing_rules.travel_root_router import (
     route_after_planner,
 )
@@ -74,12 +75,16 @@ def build_travel_master_graph(
     def travel_root(_state: TravelRootState) -> dict[str, Any]:
         # Entry dispatch. Currently always plans first; extensible to detect a
         # direct "build knowledge" intent later.
-        return {}
+        return phases.phase_update(phases.REQUIREMENTS, "Getting started on your trip plan.")
 
     def after_build(_state: TravelRootState) -> dict[str, Any]:
         # Mark that we tried building so the re-plan won't trigger another build,
         # whether the user approved (KB now ready) or rejected (web fallback).
-        return {"kb_build_attempted": True, "kb_miss": False}
+        return {
+            "kb_build_attempted": True,
+            "kb_miss": False,
+            **phases.phase_update(phases.PLANNING, "Re-planning with what I just learned."),
+        }
 
     master = StateGraph(TravelRootState)
     master.add_node("travel_root", travel_root)

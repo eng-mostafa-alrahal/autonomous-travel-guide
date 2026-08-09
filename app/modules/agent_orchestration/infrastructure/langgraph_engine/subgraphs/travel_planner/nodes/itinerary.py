@@ -8,6 +8,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
+from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.prompts.context import PromptContext
 from app.modules.agent_orchestration.domain.prompts.intent import PromptIntent
 from app.modules.agent_orchestration.domain.states.travel_planner_state import TravelPlannerState
@@ -56,6 +57,10 @@ def make_itinerary_node(llm: BaseChatModel, *, prompt_provider: IPromptProvider)
             config=trace_run_config_from_metadata(rendered.metadata),
         )
         content = str(response.content)
-        return {"itinerary": content, "messages": [AIMessage(content=content)]}
+        return {
+            "itinerary": content,
+            "messages": [AIMessage(content=content)],
+            **phases.phase_update(phases.DONE, "Your itinerary is ready."),
+        }
 
     return synthesize_itinerary
