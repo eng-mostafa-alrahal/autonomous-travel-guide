@@ -9,25 +9,23 @@ flowchart TD
     Start([entry]) --> Collect[collect_requirements - extract slots]
     Collect -->|missing slots| Ask[ask_requirements - HITL interrupt]
     Ask --> Collect
-    Collect -->|complete| Delegate[delegate - supervisor queue]
-    Delegate -->|city_expert| City[city_expert - RAG + web fallback]
-    Delegate -->|hotels| Hotels[hotels]
-    Delegate -->|flights_logistics| Flights[flights_logistics]
-    Delegate -->|food| Food[food]
-    City --> Delegate
-    Hotels --> Delegate
-    Flights --> Delegate
-    Food --> Delegate
-    Delegate -->|queue empty| Cluster[spatial_cluster - group POIs by day]
+    Collect -->|complete| City[city_expert - RAG + web fallback]
+    City -->|KB miss| EndNode([END])
+    City -->|Send fan-out| Hotels[hotels]
+    City -->|Send fan-out| Flights[flights_logistics]
+    City -->|Send fan-out| Food[food]
+    Hotels --> Cluster[spatial_cluster - group POIs by day]
+    Flights --> Cluster
+    Food --> Cluster
     Cluster --> Synth[synthesize_itinerary]
     Synth --> EndNode([END])
 ```
 
 The **supervisor** is split into two responsibilities that the plan merged into one role:
 1. **Requirements gathering** — `collect_requirements` extracts trip slots from the conversation via structured output; if required slots are missing, `ask_requirements` pauses with `interrupt()` to ask the user, then loops back.
-2. **Delegation** — once requirements are complete, `delegate` walks a queue of specialists (deterministic, so every section is produced exactly once), routing to each in turn and back, then to `synthesize_itinerary` when the queue is empty.
+2. **Specialist fan-out** — once requirements are complete, `city_expert` runs first (it's the only specialist that can trigger the Knowledge Builder on a KB miss). Provided there's no miss, `fan_out_specialists` then dispatches `hotels`, `flights_logistics`, and `food` **concurrently** via LangGraph `Send`. Their outputs merge under the `specialist_outputs` reducer, and once all three settle the flow continues to `spatial_cluster` → `synthesize_itinerary`.
 
-> Design note: delegation is a deterministic queue rather than per-step LLM routing. A planner needs *all* sections (lodging, travel, food, local knowledge), so a queue is more reliable and cheaper than asking an LLM to micro-route. This is easy to swap for LLM routing later.
+> Design note: dispatch is deterministic fan-out, not per-step LLM routing. A planner needs *all* sections (lodging, travel, food, local knowledge), so running the three independent specialists in parallel is faster than a sequential queue while staying just as predictable. `city_expert` stays sequential and first because its KB-miss hand-off must complete (or be declined) before the others are worth running.
 
 ## Required vs optional slots
 
@@ -49,8 +47,6 @@ The **supervisor** is split into two responsibilities that the plan merged into 
 | `requirements` | `dict` | Latest extracted `TripRequirements`. |
 | `requirements_complete` | `bool` | All required slots present. |
 | `missing_slots` | `list[str]` | What's still needed. |
-| `pending_specialists` | `list[str]` | Delegation queue. |
-| `next_specialist` | `str \| None` | Current routing target. |
 | `specialist_outputs` | `dict[str, list[dict]]` | Per-specialist **structured** results (validated Pydantic items, JSON-serialised), merged via reducer. |
 | `clusters` | `list[dict]` | Deterministic per-day POI groupings (`DayCluster` dumps) from `spatial_cluster`. |
 | `itinerary` | `str \| None` | Final plan. |
@@ -58,7 +54,7 @@ The **supervisor** is split into two responsibilities that the plan merged into 
 | `city` / `country` | `str \| None` | Destination handed to the Knowledge Builder (cross-graph). |
 | `kb_miss` | `bool` | City_expert found no KB data and requests a build. |
 | `kb_build_attempted` | `bool` | A build was already attempted this run (set by the master after the builder). |
-| `phase` | `str \| None` | Coarse progress phase (see below). |
+| `phase` | `str \| None` | Coarse progress phase (see below); `merge_phase` reducer resolves concurrent writes from the parallel specialists. |
 | `phase_status` | `str \| None` | User-facing progress line streamed by `stream_detail=phases`. |
 
 ## Progress reporting
@@ -72,16 +68,20 @@ Nodes attach a `phase` + `phase_status` to their state updates; the SSE layer tu
 | `travel_root` (master) | `requirements` | Run started. |
 | `collect_requirements` | `requirements` / `planning` | Which slots are still missing, or that specialists are starting. |
 | `ask_requirements` | `requirements` | Answer received, re-checking details. |
-| `delegate` | `planning` / `itinerary` | The specialist about to run, or the itinerary write-up. |
+| `city_expert` (KB hit) | `planning` | Local insights ready; the parallel specialists are starting. |
 | `city_expert` (KB miss) | `knowledge_build` | A knowledge build is about to be proposed. |
+| `hotels` / `flights_logistics` / `food` | `planning` | Each parallel specialist announces itself as it completes. |
+| `spatial_cluster` | `planning` | Places grouped into per-day buckets. |
 | `synthesize_itinerary` | `done` | Itinerary finished. |
+
+Because the parallel specialists finish in the same super-step, each writes its own `phase`/`phase_status`; the `merge_phase` reducer (`domain/phases.py`) deterministically surfaces the first write of the step so the channel stays a single user-facing string (the graph is deterministic, so this is stable run-to-run).
 
 Because progress originates *inside* the planner subgraph, the orchestrator streams with `subgraphs=True`. Each `AgentEvent` carries a `namespace` (enclosing subgraph nodes, empty at master level) so `content` / `full` modes can keep emitting master-level events only and avoid duplicating a reply that appears both nested and aggregated.
 
 ## Specialists
 
-- **city_expert** — builds a destination-scoped pgvector retriever (`build_destination_retriever(destination_key)`), queries the KB, and falls back to `web_search` when the KB returns nothing. (KB-miss auto-trigger of the Knowledge Builder is wired in **Stage 3**.)
-- **hotels** / **flights_logistics** / **food** — search-then-structure specialists driven by a shared parameterized prompt. `flights_logistics` also covers local transport / day-routing and uses `LOGISTICIAN_MODEL` when set.
+- **city_expert** — builds a destination-scoped pgvector retriever (`build_destination_retriever(destination_key)`), queries the KB, and falls back to `web_search` when the KB returns nothing. Runs **first and alone** as the KB-miss gate. (KB-miss auto-trigger of the Knowledge Builder is wired in **Stage 3**.)
+- **hotels** / **flights_logistics** / **food** — search-then-structure specialists driven by a shared parameterized prompt. They run **concurrently** (Stage 8): after the city expert clears the KB gate, `fan_out_specialists` dispatches each via `Send`, and they share a node factory parameterized by `role`. `flights_logistics` also covers local transport / day-routing and uses `LOGISTICIAN_MODEL` when set.
 
 All specialists produce **structured output** (Stage 6): a validated Pydantic list rather than prose, stored in `specialist_outputs[role]` as `model_dump()["items"]`. Schemas live in `app/modules/agent_orchestration/domain/schemas/travel_plan.py`:
 
@@ -98,7 +98,7 @@ The itinerary node renders these lists as compact bullets (name + `[category, (l
 
 ## Spatial day clustering (Stage 7)
 
-After all specialists run, `delegate` routes to the deterministic **`spatial_cluster`** node (no LLM) before synthesis. It groups the geo-located POIs into `num_days` coherent days so the itinerary doesn't zig-zag across the city.
+Once all three parallel specialists have finished, the flow converges on the deterministic **`spatial_cluster`** node (no LLM) before synthesis. It groups the geo-located POIs into `num_days` coherent days so the itinerary doesn't zig-zag across the city.
 
 - **Inputs:** POIs from `city_expert` + `food` (deduped by name — the same place can surface in both), and an **anchor** = the first hotel option that has coordinates (falls back to the POI centroid when no hotel is located).
 - **Algorithm** (`domain/clustering.py`, pure + offline): farthest-first assignment of POIs to the nearest day's centroid (so outliers spread across days), then a nearest-neighbour ordering of each day's stops starting from the anchor. Coordinate-less POIs are distributed round-robin so nothing is dropped.
@@ -141,7 +141,7 @@ flowchart TD
 
 **Flow when the KB has no data for a destination:**
 
-1. `city_expert` builds the destination retriever and finds it empty. Because the KB is operational (`retriever_provider` returned a retriever) and no build has been attempted, it sets `kb_miss=True` + `destination_key`/`city`/`country`, posts a short "I'll run a deep search, approval coming next" message, and the planner ends early (`route_after_city_expert → END`).
+1. `city_expert` builds the destination retriever and finds it empty. Because the KB is operational (`retriever_provider` returned a retriever) and no build has been attempted, it sets `kb_miss=True` + `destination_key`/`city`/`country`, posts a short "I'll run a deep search, approval coming next" message, and the planner ends early (`fan_out_specialists → END` before the parallel fan-out fires).
 2. The master routes to the **Knowledge Builder** (`route_after_planner`). Its `confirm_build` node `interrupt()`s for the user's **approval**.
    - **Approved** → deep research → dedup → ingest into pgvector → `notify_complete`. The KB is now populated.
    - **Rejected** → the builder ends without writing anything to the KB.

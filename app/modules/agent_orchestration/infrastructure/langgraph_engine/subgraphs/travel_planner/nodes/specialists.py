@@ -44,14 +44,16 @@ logger = logging.getLogger(__name__)
 
 _EVIDENCE_CAP = 6000
 
-_QUERY_TEMPLATES: dict[str, str] = {
+# Each parallel specialist's web-search query template, keyed by role.
+ROLE_QUERIES: dict[str, str] = {
     "hotels": "best places to stay and accommodation areas in {dest} for a {budget} budget",
     "flights_logistics": "how to get to {dest} and get around locally (transport options, passes)",
     "food": "best restaurants, street food, and local cuisine to try in {dest}",
 }
 
 # Which structured list each specialist role produces.
-_OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
+ROLE_SCHEMAS: dict[str, type[BaseModel]] = {
+    "city_expert": POIList,
     "hotels": HotelOptionList,
     "flights_logistics": FlightOptionList,
     "food": POIList,
@@ -89,18 +91,18 @@ async def _structured_items(
 
 def make_specialist_node(
     role: str,
-    llm: BaseChatModel,
     *,
+    llm: BaseChatModel,
     prompt_provider: IPromptProvider,
     web_search_tool: BaseTool | None,
 ):
-    schema = _OUTPUT_SCHEMAS.get(role, POIList)
+    schema = ROLE_SCHEMAS[role]
 
     async def specialist(state: TravelPlannerState) -> dict[str, Any]:
         requirements = state.get("requirements", {})
         dest = destination_label(requirements)
         budget = str(requirements.get("budget") or "any")
-        template = _QUERY_TEMPLATES.get(role, "{role} recommendations for a trip to {dest}")
+        template = ROLE_QUERIES.get(role, "{role} recommendations for a trip to {dest}")
         query = template.format(dest=dest, budget=budget, role=role)
 
         evidence = await run_web_search(web_search_tool, query)
@@ -117,7 +119,12 @@ def make_specialist_node(
             ),
             "Provide your recommendations.",
         )
-        return {"specialist_outputs": {role: items}}
+        return {
+            "specialist_outputs": {role: items},
+            # With no delegate turn between parallel specialists, each announces
+            # itself (this also covers the KB re-plan, where Send args are dropped).
+            **phases.phase_update(phases.PLANNING, phases.specialist_status(role, dest)),
+        }
 
     return specialist
 
@@ -195,6 +202,13 @@ def make_city_expert_node(
             ),
             "Share the key local insights.",
         )
-        return {"specialist_outputs": {"city_expert": items}}
+        return {
+            "specialist_outputs": {"city_expert": items},
+            # The three remaining specialists are about to fan out and run in
+            # parallel; they announce themselves as each finishes.
+            **phases.phase_update(
+                phases.PLANNING, f"Local insights ready — now covering {dest} in depth."
+            ),
+        }
 
     return city_expert

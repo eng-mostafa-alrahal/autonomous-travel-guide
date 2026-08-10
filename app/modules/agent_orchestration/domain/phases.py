@@ -5,9 +5,9 @@ updates; the SSE layer turns those into ``stream_detail=phases`` events.
 
 LangGraph emits a node's updates only *after* that node returns, so a node
 announces the work that comes **next** rather than what it just finished. The
-cheap nodes (``travel_root``, ``delegate``, ``confirm_build``, ``after_build``)
-therefore carry the announcements that sit in front of the slow LLM and
-deep-research steps.
+cheap nodes (``travel_root``, ``confirm_build``, ``after_build``) therefore carry
+the announcements that sit in front of the slow LLM and deep-research steps; the
+parallel specialists each announce themselves as they complete.
 """
 
 from __future__ import annotations
@@ -35,6 +35,21 @@ _FALLBACK_SPECIALIST_STATUS = "Consulting the {role} specialist for {destination
 def phase_update(phase: Phase, status: str) -> dict[str, str]:
     """State-update fragment carrying a phase and its user-facing status line."""
     return {"phase": phase, "phase_status": status}
+
+
+def merge_phase(current: str | None, incoming: str | list[str] | None) -> str | None:
+    """Reducer for the ``phase`` / ``phase_status`` channels.
+
+    The parallel specialists (Stage 8) each finish in the same super-step and all
+    write their own announcement, so the channel receives several values at once.
+    ``specialist_outputs`` is a real merged reducer, but the phase line is a single
+    user-facing string — so we deterministically surface the first write of the
+    step (the graph is deterministic, so this is stable run-to-run). Keeping one
+    string preserves the existing SSE shape.
+    """
+    if isinstance(incoming, list):
+        return incoming[0] if incoming else current
+    return incoming if incoming is not None else current
 
 
 def specialist_status(role: str, destination: str) -> str:

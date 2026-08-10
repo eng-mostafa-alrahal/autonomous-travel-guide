@@ -51,12 +51,12 @@ SaaS features. Specialists are search-then-summarize (no live booking APIs yet).
 | FR-P1 | The planner MUST extract `TripRequirements` from the conversation using structured LLM output (`collect_requirements` node). |
 | FR-P2 | Required slots are **destination** (city and/or country), **`num_days`**, and **`budget`** (free text, e.g. `"$1500"` or `"mid-range"`). Optional slots: `start_date`, `party_size`, `interests`. |
 | FR-P3 | While required slots are missing, the planner MUST pause with a LangGraph `interrupt()` (`ask_requirements`), ask the user only for the missing slots, and loop back to extraction on resume. |
-| FR-P4 | Once requirements are complete, a deterministic `delegate` node MUST walk a specialist queue so **every section is produced exactly once**: `city_expert`, `hotels`, `flights_logistics`, `food`. Delegation MUST NOT rely on per-step LLM routing. |
+| FR-P4 | Once requirements are complete, `city_expert` MUST run **first** (it gates on a KB miss), after which `hotels`, `flights_logistics`, and `food` MUST fan out to run **concurrently** via LangGraph `Send`. Dispatch is deterministic — every section is produced exactly once, with no per-step LLM routing. |
 | FR-P5 | `city_expert` MUST query a **destination-scoped pgvector retriever** (`build_destination_retriever(destination_key)`) and fall back to `web_search` when retrieval is empty or the KB is unavailable. |
-| FR-P6 | On a KB miss, `city_expert` MUST set `kb_miss = true` and a canonical `destination_key` in state so the master graph can trigger the Knowledge Builder. |
-| FR-P7 | `hotels`, `flights_logistics`, and `food` are search-then-summarize specialists sharing one parameterized prompt (`travel_specialist`, parameter `role`). `flights_logistics` also covers local transport and day-routing, and MUST use `LOGISTICIAN_MODEL` when set. |
+| FR-P6 | On a KB miss, `city_expert` MUST set `kb_miss = true` and a canonical `destination_key` in state so the master graph can trigger the Knowledge Builder; the planner MUST then end before the parallel fan-out fires. |
+| FR-P7 | `hotels`, `flights_logistics`, and `food` are search-then-summarize specialists sharing one parameterized prompt (`travel_specialist`, parameter `role`) and one node factory parameterized by `role`. `flights_logistics` also covers local transport and day-routing, and MUST use `LOGISTICIAN_MODEL` when set. |
 | FR-P8 | `synthesize_itinerary` MUST compose the final day-by-day plan from all `specialist_outputs`, respecting budget and `num_days`, and write it to `itinerary` and as the final `AIMessage`. It MUST group geographically-nearby POIs into the same day using their coordinates. |
-| FR-P9 | Specialist results MUST merge into `specialist_outputs` via a state reducer (safe for future parallel execution). |
+| FR-P9 | Specialist results MUST merge into `specialist_outputs` via a state reducer so concurrent writes from the parallel `Send` branches combine per-key. Because the parallel specialists also write `phase`/`phase_status` in the same super-step, those channels MUST use a reducer (`merge_phase`) that deterministically surfaces one announcement per step. |
 
 #### 3.1.1 Structured specialist outputs ✅
 
@@ -211,13 +211,12 @@ SaaS features. Specialists are search-then-summarize (no live booking APIs yet).
 
 | Field | Type | Purpose |
 |-------|------|---------|
-| `phase` / `phase_status` | `str \| None` | Progress phase + user-facing status line. |
+| `phase` / `phase_status` | `str \| None` | Progress phase + user-facing status line (`merge_phase` reducer for concurrent specialist writes). |
 | `requirements` | `dict` | Latest extracted `TripRequirements`. |
 | `requirements_complete` | `bool` | All required slots present. |
 | `missing_slots` | `list[str]` | Slots still needed. |
-| `pending_specialists` | `list[str]` | Delegation queue. |
-| `next_specialist` | `str \| None` | Current routing target. |
-| `specialist_outputs` | `dict[str, str]` | Per-specialist results (reducer-merged). |
+| `specialist_outputs` | `dict[str, list[dict]]` | Per-specialist **structured** results (reducer-merged). |
+| `clusters` | `list[dict]` | Per-day POI groupings (`DayCluster` dumps) from `spatial_cluster`. |
 | `itinerary` | `str \| None` | Final plan (markdown). |
 | `destination_key` / `city` / `country` | `str` | Cross-graph handoff to the Knowledge Builder. |
 | `kb_miss` / `kb_build_attempted` | `bool` | Auto-trigger + loop guard. |
@@ -293,8 +292,7 @@ Tracked as Stages 5–10 in the active plan; summarized here for completeness.
 | ~~5 — Phase SSE~~ | ✅ **Done** — see §3.5. |
 | ~~6 — Structured outputs~~ | ✅ **Done** — see §3.1.1. (`ItineraryDay` typed output was deferred to keep the final answer as markdown.) |
 | ~~7 — Spatial clustering~~ | ✅ **Done** — see §3.1.2. Deterministic haversine day-clustering + travel-time heuristics feed the itinerary. |
-| 7 — Spatial clustering | Deterministic (non-LLM) haversine day-clustering of POIs anchored on the chosen hotel, feeding the itinerary prompt. |
-| 8 — Parallel specialists | Specialists fan out concurrently via LangGraph `Send` with a join node; the sequential queue remains switchable for CI determinism. |
+| ~~8 — Parallel specialists~~ | ✅ **Done** — `city_expert` runs first as the KB-miss gate, then `hotels`/`flights_logistics`/`food` fan out concurrently via LangGraph `Send` (no join node needed: each converges on `spatial_cluster`, which LangGraph runs once all three settle). `phase`/`phase_status` channels gained a `merge_phase` reducer for the concurrent writes. |
 | 9 — Persistence & revision | Itineraries persist in a new table (Alembic migration); follow-up revision turns re-run only affected specialists/days. |
 | 10 — Real APIs | Flights/hotels/places adapters (e.g. Amadeus, Booking, Google Places/OSRM) behind the same node interfaces; web-search mode kept for CI/fallback. |
 

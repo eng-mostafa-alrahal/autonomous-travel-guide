@@ -15,7 +15,6 @@ from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.prompts.context import PromptContext
 from app.modules.agent_orchestration.domain.prompts.intent import PromptIntent
 from app.modules.agent_orchestration.domain.prompts.schema_compact import compact_schema_for_llm
-from app.modules.agent_orchestration.domain.routing_rules.travel_planner_router import SPECIALISTS
 from app.modules.agent_orchestration.domain.schemas.trip_requirements import TripRequirements
 from app.modules.agent_orchestration.domain.states.travel_planner_state import TravelPlannerState
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.prompt_trace_config import (
@@ -79,7 +78,6 @@ def make_collect_requirements_node(llm: BaseChatModel, *, prompt_provider: IProm
             "requirements_complete": complete,
         }
         if complete:
-            updates["pending_specialists"] = list(SPECIALISTS)
             updates.update(
                 phases.phase_update(
                     phases.PLANNING, "Trip details captured — bringing in the specialists."

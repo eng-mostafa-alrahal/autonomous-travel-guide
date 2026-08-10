@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.graph import END
+from langgraph.types import Send
+
 from app.modules.agent_orchestration.application.ports.deep_research_port import (
     DeepResearchResult,
     IDeepResearchClient,
@@ -18,7 +21,7 @@ from app.modules.agent_orchestration.application.use_cases.kb_status_service imp
     KBStatusService,
 )
 from app.modules.agent_orchestration.domain.routing_rules.travel_planner_router import (
-    route_after_city_expert,
+    fan_out_specialists,
 )
 from app.modules.agent_orchestration.domain.routing_rules.travel_root_router import (
     route_after_planner,
@@ -39,18 +42,21 @@ def test_route_after_planner_finalizes_without_miss():
     assert route_after_planner({"kb_miss": False}) == "finalize"  # type: ignore[arg-type]
 
 
-def test_route_after_city_expert_ends_on_fresh_miss():
+def test_fan_out_ends_on_fresh_miss():
+    # A fresh KB miss ends the planner early so the master can run the builder.
     state = {"kb_miss": True, "kb_build_attempted": False}
-    assert route_after_city_expert(state) == "end"  # type: ignore[arg-type]
+    assert fan_out_specialists(state) == END  # type: ignore[arg-type]
 
 
-def test_route_after_city_expert_continues_after_attempt():
+def test_fan_out_fires_after_attempt():
     state = {"kb_miss": True, "kb_build_attempted": True}
-    assert route_after_city_expert(state) == "delegate"  # type: ignore[arg-type]
+    sends = fan_out_specialists(state)  # type: ignore[arg-type]
+    assert isinstance(sends, list) and all(isinstance(s, Send) for s in sends)
 
 
-def test_route_after_city_expert_continues_without_miss():
-    assert route_after_city_expert({}) == "delegate"  # type: ignore[arg-type]
+def test_fan_out_fires_without_miss():
+    sends = fan_out_specialists({})  # type: ignore[arg-type]
+    assert {s.node for s in sends} == {"hotels", "flights_logistics", "food"}
 
 
 def test_travel_master_graph_compiles():

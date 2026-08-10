@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.graph import END
+from langgraph.types import Send
+
 from app.modules.agent_orchestration.domain.routing_rules.travel_planner_router import (
+    PARALLEL_SPECIALISTS,
     SPECIALISTS,
+    fan_out_specialists,
     route_after_requirements,
-    route_specialist,
 )
 from app.modules.agent_orchestration.domain.schemas.trip_requirements import TripRequirements
 from app.modules.agent_orchestration.domain.states.travel_planner_state import (
@@ -44,7 +48,7 @@ def test_route_after_requirements_incomplete():
 
 def test_route_after_requirements_complete():
     state = {"requirements_complete": True}
-    assert route_after_requirements(state) == "delegate"  # type: ignore[arg-type]
+    assert route_after_requirements(state) == "city_expert"  # type: ignore[arg-type]
 
 
 def test_route_after_requirements_error():
@@ -52,14 +56,31 @@ def test_route_after_requirements_error():
     assert route_after_requirements(state) == "end"  # type: ignore[arg-type]
 
 
-def test_route_specialist_returns_next():
-    assert route_specialist({"next_specialist": "hotels"}) == "hotels"  # type: ignore[arg-type]
+def test_fan_out_sends_each_parallel_specialist():
+    # After city_expert, the remaining specialists fan out to run concurrently.
+    sends = fan_out_specialists({"kb_miss": False})  # type: ignore[arg-type]
+    assert isinstance(sends, list)
+    assert {s.node for s in sends} == {"hotels", "flights_logistics", "food"}
+    assert all(isinstance(s, Send) for s in sends)
+    # Each Send carries a snapshot of the state (so requirements are available).
+    assert all(isinstance(s.arg, dict) for s in sends)
 
 
-def test_route_specialist_clusters_when_done():
-    # Once the specialist queue is empty, delegate routes to spatial clustering
-    # before itinerary synthesis.
-    assert route_specialist({"next_specialist": None}) == "cluster"  # type: ignore[arg-type]
+def test_fan_out_ends_on_kb_miss():
+    # A fresh KB miss ends the planner early so the knowledge builder runs first.
+    state = {"kb_miss": True, "kb_build_attempted": False}
+    assert fan_out_specialists(state) == END  # type: ignore[arg-type]
+
+
+def test_fan_out_continues_after_build_attempted():
+    # After a build attempt (approved or rejected), don't re-trigger the builder.
+    sends = fan_out_specialists({"kb_miss": True, "kb_build_attempted": True})  # type: ignore[arg-type]
+    assert isinstance(sends, list)
+    assert len(sends) == len(PARALLEL_SPECIALISTS)
+
+
+def test_fan_out_ends_on_error():
+    assert fan_out_specialists({"error": "x"}) == END  # type: ignore[arg-type]
 
 
 def test_merge_specialist_outputs():
@@ -97,6 +118,11 @@ def test_travel_planner_graph_compiles():
     )
     compiled = graph.compile()
     nodes = set(compiled.get_graph().nodes.keys())
-    expected = {"collect_requirements", "ask_requirements", "delegate", "synthesize_itinerary"}
+    expected = {
+        "collect_requirements",
+        "ask_requirements",
+        "spatial_cluster",
+        "synthesize_itinerary",
+    }
     expected |= set(SPECIALISTS)
     assert expected <= nodes

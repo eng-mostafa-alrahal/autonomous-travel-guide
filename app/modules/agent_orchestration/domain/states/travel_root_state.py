@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
+from app.modules.agent_orchestration.domain.phases import merge_phase
 from app.modules.agent_orchestration.domain.states.base_state import BaseAgentState
 from app.modules.agent_orchestration.domain.states.travel_planner_state import (
     merge_specialist_outputs,
@@ -20,8 +21,6 @@ class TravelRootState(BaseAgentState):
     requirements: dict[str, Any]
     requirements_complete: bool
     missing_slots: list[str]
-    pending_specialists: list[str]
-    next_specialist: str | None
     specialist_outputs: Annotated[dict[str, list[dict[str, Any]]], merge_specialist_outputs]
     clusters: list[dict[str, Any]]
     itinerary: str | None
@@ -39,5 +38,5 @@ class TravelRootState(BaseAgentState):
     kb_miss: bool
     kb_build_attempted: bool
     # ── progress reporting ──────────────────────────────────────
-    phase: str | None
-    phase_status: str | None
+    phase: Annotated[str | None, merge_phase]
+    phase_status: Annotated[str | None, merge_phase]

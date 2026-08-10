@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
+from app.modules.agent_orchestration.domain.phases import merge_phase
 from app.modules.agent_orchestration.domain.states.base_state import BaseAgentState
 
 
@@ -23,14 +24,13 @@ class TravelPlannerState(BaseAgentState):
     requirements: dict[str, Any]
     requirements_complete: bool
     missing_slots: list[str]
-    pending_specialists: list[str]
-    next_specialist: str | None
     specialist_outputs: Annotated[dict[str, list[dict[str, Any]]], merge_specialist_outputs]
     clusters: list[dict[str, Any]]
     itinerary: str | None
     # Progress reporting (streamed as `stream_detail=phases` SSE events).
-    phase: str | None
-    phase_status: str | None
+    # merge_phase resolves the concurrent writes from the parallel specialists.
+    phase: Annotated[str | None, merge_phase]
+    phase_status: Annotated[str | None, merge_phase]
     # Cross-graph handoff (knowledge-builder auto-trigger). Also present on
     # KnowledgeBuilderState / TravelRootState so they flow through the master graph.
     destination_key: str

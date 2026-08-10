@@ -226,8 +226,6 @@ class MainGraphOrchestrator(IAgentOrchestrator):
                 "requirements": {},
                 "requirements_complete": False,
                 "missing_slots": [],
-                "pending_specialists": [],
-                "next_specialist": None,
                 "specialist_outputs": {},
                 "clusters": [],
                 "itinerary": None,

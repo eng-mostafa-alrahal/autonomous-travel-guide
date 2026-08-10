@@ -159,8 +159,6 @@ def _initial_state(message: str) -> dict[str, Any]:
         "requirements": {},
         "requirements_complete": False,
         "missing_slots": [],
-        "pending_specialists": [],
-        "next_specialist": None,
         "specialist_outputs": {},
         "itinerary": None,
         "destination_key": "",
@@ -199,6 +197,9 @@ async def test_kb_miss_approve_replans_and_produces_itinerary():
     assert final.values["doc_count"] == 1
     assert final.values["itinerary"]
     assert "city_expert" in final.values["specialist_outputs"]
+    # Stage 8: the parallel specialists fanned out and merged their outputs.
+    assert {"hotels", "flights_logistics", "food"} <= set(final.values["specialist_outputs"])
+    assert final.values["clusters"], "spatial clustering should run after the specialists"
 
 
 async def test_stream_reports_phase_progress_from_inside_subgraphs():
@@ -222,10 +223,10 @@ async def test_stream_reports_phase_progress_from_inside_subgraphs():
     first_pass = await collect(_initial_state("Plan me 3 days in Atlantis, budget $1500"))
     statuses = [status for _phase, status in first_pass]
 
-    # Requirements -> specialist announcement -> KB miss, all before the interrupt.
+    # Requirements -> KB miss, all before the interrupt. (city_expert now runs
+    # first as the gate; on a KB miss it short-circuits to the build request.)
     assert ("requirements", "Getting started on your trip plan.") in first_pass
     assert any("bringing in the specialists" in s for s in statuses)
-    assert any("Researching local insights for Atlantis" in s for s in statuses)
     assert any("asking to run deep research" in s for s in statuses)
 
     second_pass = await collect(Command(resume={"action": "approve"}))
