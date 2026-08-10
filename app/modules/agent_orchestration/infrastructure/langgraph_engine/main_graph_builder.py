@@ -34,6 +34,9 @@ from app.modules.agent_orchestration.application.ports.agent_orchestrator_port i
 )
 from app.modules.agent_orchestration.application.ports.llm_registry_port import ILLMRegistry
 from app.modules.agent_orchestration.application.ports.tool_registry_port import IToolRegistry
+from app.modules.agent_orchestration.application.use_cases.itinerary_service import (
+    ItineraryService,
+)
 from app.modules.agent_orchestration.application.use_cases.kb_status_service import (
     KBStatusService,
 )
@@ -77,6 +80,8 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         self._llm_registry = llm_registry
         self._tool_registry = tool_registry
         self._compiled: CompiledStateGraph | None = None
+        # Stage 9: persist finished itineraries (best-effort; never fails a turn).
+        self._itineraries = ItineraryService(uow_factory=SqlAlchemyUnitOfWork)
 
     def _compile(self) -> CompiledStateGraph:
         if self._compiled is not None:
@@ -258,9 +263,35 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         state: Any,
         *,
         thread_id: str,
+        user_id: str,
     ) -> AgentRunResult:
         snapshot = await graph.aget_state(config)
-        return to_run_result(state, snapshot, thread_id=thread_id)
+        result = to_run_result(state, snapshot, thread_id=thread_id)
+        await self._save_itinerary(result, snapshot, thread_id=thread_id, user_id=user_id)
+        return result
+
+    async def _save_itinerary(
+        self,
+        result: AgentRunResult,
+        snapshot: Any,
+        *,
+        thread_id: str,
+        user_id: str,
+    ) -> None:
+        """Persist the finished itinerary (travel mode only, non-interrupted runs)."""
+        if not get_settings().TRAVEL_PLANNER_ENABLED or result.interrupted:
+            return
+        values = getattr(snapshot, "values", None) or {}
+        itinerary = values.get("itinerary")
+        if not itinerary:
+            return
+        await self._itineraries.save_completed(
+            session_id=thread_id,
+            user_id=user_id,
+            itinerary=itinerary,
+            requirements=values.get("requirements") or {},
+            clusters=values.get("clusters") or [],
+        )
 
     # ── IAgentOrchestrator implementation ────────────────────────
 
@@ -277,7 +308,9 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         initial_state = self._build_initial_state(user_message, session_id, user_id)
         config = self._config_for(session_id)
         state = await graph.ainvoke(initial_state, config=config)
-        result = await self._result_from(graph, config, state, thread_id=session_id)
+        result = await self._result_from(
+            graph, config, state, thread_id=session_id, user_id=user_id
+        )
         elapsed_ms = (perf_counter() - started) * 1000
         logger.info(
             "graph.invoke completed request_id=%s thread_id=%s interrupted=%s elapsed_ms=%.1f",
@@ -364,8 +397,9 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         if feedback:
             resume_value["feedback"] = feedback
 
+        user_id = str((snapshot.values or {}).get("user_id") or "")
         state = await graph.ainvoke(Command(resume=resume_value), config=config)
-        result = await self._result_from(graph, config, state, thread_id=thread_id)
+        result = await self._result_from(graph, config, state, thread_id=thread_id, user_id=user_id)
         elapsed_ms = (perf_counter() - started) * 1000
         logger.info(
             (

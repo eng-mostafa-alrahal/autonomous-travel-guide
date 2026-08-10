@@ -107,6 +107,15 @@ Once all three parallel specialists have finished, the flow converges on the det
 
 Because it's deterministic, the same specialist outputs always yield the same grouping — which is what makes it unit-testable without an LLM.
 
+## Persistence (Stage 9)
+
+When a run finishes (non-interrupted), the orchestrator persists the plan to the `itineraries` table — best-effort, so a DB hiccup never fails a successful turn. The save happens in `MainGraphOrchestrator._result_from` (used by both `invoke` and `resume`), reading the final `itinerary` / `requirements` / `clusters` from the graph snapshot it already fetches.
+
+- **Table** `itineraries` (`alembic/versions/b7c8d9e0f1a2_add_itineraries.py`): `id` (uuid7 PK), `session_id`/`user_id` (FKs, `ON DELETE CASCADE`, indexed), `content` (markdown), `requirements` (JSONB — for revision diffs), `clusters` (JSONB — per-day stops + legs), `num_days`, `destination_label`, timestamps.
+- **Layers** — domain entity `domain/itinerary.py` (`Itinerary`), port `application/ports/itinerary_repository_port.py` (`IItineraryRepository`), use-case `application/use_cases/itinerary_service.py` (`ItineraryService.save_completed` / `get_latest_for_session`), concrete `infrastructure/database/postgres/repositories/itinerary_repository.py`, registered on `SqlAlchemyUnitOfWork.itineraries`.
+
+> A follow-up **revision** turn (re-run only the specialists/days affected by an edit) is intentionally deferred. The stored `requirements` + `clusters` are the inputs that revision will diff against.
+
 ## Prompts
 
 Registered in `app/core/config/prompt_registry.toml`:

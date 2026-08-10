@@ -1,3 +1,6 @@
+from app.infrastructure.database.postgres.models.itinerary_model import (  # noqa: F401
+    ItineraryORM,
+)
 from app.infrastructure.database.postgres.models.kb_destination_model import (  # noqa: F401
     KBDestinationORM,
 )

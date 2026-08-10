@@ -293,7 +293,7 @@ Tracked as Stages 5–10 in the active plan; summarized here for completeness.
 | ~~6 — Structured outputs~~ | ✅ **Done** — see §3.1.1. (`ItineraryDay` typed output was deferred to keep the final answer as markdown.) |
 | ~~7 — Spatial clustering~~ | ✅ **Done** — see §3.1.2. Deterministic haversine day-clustering + travel-time heuristics feed the itinerary. |
 | ~~8 — Parallel specialists~~ | ✅ **Done** — `city_expert` runs first as the KB-miss gate, then `hotels`/`flights_logistics`/`food` fan out concurrently via LangGraph `Send` (no join node needed: each converges on `spatial_cluster`, which LangGraph runs once all three settle). `phase`/`phase_status` channels gained a `merge_phase` reducer for the concurrent writes. |
-| 9 — Persistence & revision | Itineraries persist in a new table (Alembic migration); follow-up revision turns re-run only affected specialists/days. |
+| 9 — Persistence & revision | **Persistence ✅ Done** — `itineraries` table (Alembic `b7c8d9e0f1a2`) + `ItineraryService`; the orchestrator saves the finished plan (markdown + `requirements` + `clusters`) best-effort on completion. **Revision 🔜 pending** — a follow-up turn will diff the new requirements against the stored itinerary's and re-run only affected specialists/days. |
 | 10 — Real APIs | Flights/hotels/places adapters (e.g. Amadeus, Booking, Google Places/OSRM) behind the same node interfaces; web-search mode kept for CI/fallback. |
 
 ---

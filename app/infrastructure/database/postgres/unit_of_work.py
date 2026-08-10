@@ -6,6 +6,9 @@ from types import TracebackType
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.infrastructure.database.postgres.repositories.itinerary_repository import (
+    ItineraryRepository,
+)
 from app.infrastructure.database.postgres.repositories.kb_destination_repository import (
     KBDestinationRepository,
 )
@@ -26,6 +29,7 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
         self.users = UserRepository(self.session)
         self.sessions = SessionRepository(self.session)
         self.kb_destinations = KBDestinationRepository(self.session)
+        self.itineraries = ItineraryRepository(self.session)
         return self
 
     async def __aexit__(
