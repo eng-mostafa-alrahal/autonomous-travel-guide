@@ -20,6 +20,9 @@ from pydantic import BaseModel
 
 from app.infrastructure.llm_gateways.structured_output import with_pydantic_output
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
+from app.modules.agent_orchestration.application.ports.travel_providers_port import (
+    IPlacesProvider,
+)
 from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.kb_destination import build_destination_key
 from app.modules.agent_orchestration.domain.prompts.context import PromptContext
@@ -62,6 +65,16 @@ ROLE_SCHEMAS: dict[str, type[BaseModel]] = {
 RetrieverProvider = Callable[[str | None], BaseRetriever | None]
 
 
+def _merge_coords(items: list[dict[str, Any]], geo: dict[str, tuple[float, float]]) -> None:
+    """Fill missing lat/lng in-place from a name -> (lat, lng) lookup."""
+    for item in items:
+        if item.get("lat") is not None and item.get("lng") is not None:
+            continue
+        key = str(item.get("name") or "").strip().lower()
+        if key in geo:
+            item["lat"], item["lng"] = geo[key]
+
+
 async def _structured_items(
     llm: BaseChatModel,
     prompt_provider: IPromptProvider,
@@ -95,6 +108,7 @@ def make_specialist_node(
     llm: BaseChatModel,
     prompt_provider: IPromptProvider,
     web_search_tool: BaseTool | None,
+    places_provider: IPlacesProvider | None = None,
 ):
     schema = ROLE_SCHEMAS[role]
 
@@ -105,7 +119,15 @@ def make_specialist_node(
         template = ROLE_QUERIES.get(role, "{role} recommendations for a trip to {dest}")
         query = template.format(dest=dest, budget=budget, role=role)
 
-        evidence = await run_web_search(web_search_tool, query)
+        # Stage 10: for the food specialist, try real POI data (with coords) first;
+        # fall back to web-search evidence + LLM when the provider yields nothing.
+        provider_pois: list[dict[str, Any]] | None = None
+        if role == "food" and places_provider is not None:
+            found = await places_provider.search_pois(query)
+            if found:
+                provider_pois = [p.model_dump() for p in found]
+
+        evidence = "" if provider_pois is not None else await run_web_search(web_search_tool, query)
         items = await _structured_items(
             llm,
             prompt_provider,
@@ -119,6 +141,10 @@ def make_specialist_node(
             ),
             "Provide your recommendations.",
         )
+        if provider_pois is not None:
+            # Real coordinates win; keep any LLM notes for colour.
+            geo = {p["name"].strip().lower(): (p["lat"], p["lng"]) for p in provider_pois}
+            _merge_coords(items, geo)
         return {
             "specialist_outputs": {role: items},
             # With no delegate turn between parallel specialists, each announces
@@ -135,6 +161,7 @@ def make_city_expert_node(
     prompt_provider: IPromptProvider,
     retriever_provider: RetrieverProvider | None,
     web_search_tool: BaseTool | None,
+    places_provider: IPlacesProvider | None = None,
 ):
     async def city_expert(state: TravelPlannerState) -> dict[str, Any]:
         requirements = state.get("requirements", {})
@@ -202,6 +229,10 @@ def make_city_expert_node(
             ),
             "Share the key local insights.",
         )
+        # Stage 10: enrich LLM best-estimate coordinates with real geocoding.
+        if places_provider is not None:
+            geo = await _geocode_items(places_provider, items, dest)
+            _merge_coords(items, geo)
         return {
             "specialist_outputs": {"city_expert": items},
             # The three remaining specialists are about to fan out and run in
@@ -212,3 +243,20 @@ def make_city_expert_node(
         }
 
     return city_expert
+
+
+async def _geocode_items(
+    provider: IPlacesProvider, items: list[dict[str, Any]], dest: str
+) -> dict[str, tuple[float, float]]:
+    """Geocode items missing coordinates via the places provider (best-effort)."""
+    geo: dict[str, tuple[float, float]] = {}
+    for item in items:
+        if item.get("lat") is not None and item.get("lng") is not None:
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        match = await provider.geocode(f"{name}, {dest}")
+        if match and match.lat is not None and match.lng is not None:
+            geo[name.lower()] = (match.lat, match.lng)
+    return geo

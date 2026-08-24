@@ -16,6 +16,10 @@ from langchain_core.tools import BaseTool
 from langgraph.graph import END, StateGraph
 
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
+from app.modules.agent_orchestration.application.ports.travel_providers_port import (
+    IPlacesProvider,
+    ITransitProvider,
+)
 from app.modules.agent_orchestration.domain.routing_rules.travel_planner_router import (
     fan_out_specialists,
     route_after_requirements,
@@ -48,6 +52,8 @@ def build_travel_planner_graph(
     retriever_provider: RetrieverProvider | None = None,
     requirements_llm: BaseChatModel | None = None,
     logistician_llm: BaseChatModel | None = None,
+    transit_provider: ITransitProvider | None = None,
+    places_provider: IPlacesProvider | None = None,
 ) -> StateGraph:
     req_llm = requirements_llm or llm
     logistics_llm = logistician_llm or llm
@@ -65,6 +71,7 @@ def build_travel_planner_graph(
             prompt_provider=prompt_provider,
             retriever_provider=retriever_provider,
             web_search_tool=web_search_tool,
+            places_provider=places_provider,
         ),
     )
     graph.add_node(
@@ -85,10 +92,14 @@ def build_travel_planner_graph(
     graph.add_node(
         "food",
         make_specialist_node(
-            "food", llm=llm, prompt_provider=prompt_provider, web_search_tool=web_search_tool
+            "food",
+            llm=llm,
+            prompt_provider=prompt_provider,
+            web_search_tool=web_search_tool,
+            places_provider=places_provider,
         ),
     )
-    graph.add_node("spatial_cluster", make_spatial_cluster_node())
+    graph.add_node("spatial_cluster", make_spatial_cluster_node(transit_provider))
     graph.add_node(
         "synthesize_itinerary",
         make_itinerary_node(llm, prompt_provider=prompt_provider),

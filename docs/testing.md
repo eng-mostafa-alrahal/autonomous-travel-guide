@@ -37,6 +37,16 @@ Small, deterministic, no I/O. Cover the pure-domain surface and infrastructure h
 | `test_domain_models.py` | User / Session domain entity invariants |
 | `test_jwt_service.py` | Token issue / verify / expiry |
 | `test_exceptions.py` | `AppException` tree + serialisation |
+| `test_travel_planner.py` | Planner routers (`route_after_requirements`, `fan_out_specialists`) + graph compile |
+| `test_structured_specialists.py` | Structured-output specialists + parallel-run concurrency |
+| `test_spatial_clustering.py` | Haversine/geo helpers, deterministic day clustering, real-transit leg override |
+| `test_knowledge_builder.py` | KB builder nodes (confirm, research, dedup, ingest) with fakes |
+| `test_phase_streaming.py` | `phase` / `phase_status` SSE progress events |
+| `test_http_ingestion.py` | External RAG Document Processor adapter (mocked HTTP) |
+| `test_travel_master.py` | Master-graph routing: KB-miss trigger, re-plan loop |
+| `test_travel_master_e2e.py` | Full travel master runs with fakes (KB hit / miss / approve / reject) |
+| `test_itinerary_persistence.py` | `ItineraryService` best-effort save + repository mapping (Stage 9) |
+| `test_travel_providers.py` | OSM adapters (mocked HTTP), factory flags, fallback behaviour (Stage 10) |
 
 Run just unit:
 

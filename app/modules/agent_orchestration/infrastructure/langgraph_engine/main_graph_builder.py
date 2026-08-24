@@ -24,6 +24,7 @@ from app.core.observability.request_context import get_request_id
 from app.infrastructure.database.postgres.unit_of_work import SqlAlchemyUnitOfWork
 from app.infrastructure.ingestion.factory import build_ingestion_service
 from app.infrastructure.research.jina_deepsearch_client import JinaDeepSearchClient
+from app.infrastructure.travel.factory import build_places_provider, build_transit_provider
 from app.modules.agent_orchestration.application.dtos.agent_result import (
     AgentEvent,
     AgentRunResult,
@@ -190,6 +191,9 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         )
         ingestion_service = build_ingestion_service(settings)
         kb_status_service = KBStatusService(uow_factory=SqlAlchemyUnitOfWork)
+        # Stage 10: real providers (None ⇒ web-search / heuristic fallback).
+        transit_provider = build_transit_provider(settings)
+        places_provider = build_places_provider(settings)
 
         master = build_travel_master_graph(
             llm=llm,
@@ -201,6 +205,8 @@ class MainGraphOrchestrator(IAgentOrchestrator):
             retriever_provider=retriever_provider,
             validator_llm=_opt_model(settings.VALIDATOR_MODEL),
             logistician_llm=_opt_model(settings.LOGISTICIAN_MODEL),
+            transit_provider=transit_provider,
+            places_provider=places_provider,
         )
 
         checkpointer = get_postgres_saver()

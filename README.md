@@ -10,10 +10,12 @@ Production-oriented FastAPI + LangGraph backend that **plans personalised trips*
 
 ### Travel guide (primary — `TRAVEL_PLANNER_ENABLED=true`)
 
-- **Travel Planner** graph — collects trip requirements (HITL), runs specialists (city expert with RAG, hotels, flights/logistics, food), synthesises a day-by-day itinerary
+- **Travel Planner** graph — collects trip requirements (HITL), runs specialists (city expert with RAG first, then hotels / flights-logistics / food **in parallel** via LangGraph `Send`), clusters POIs into coherent days, synthesises a day-by-day itinerary
 - **Knowledge Builder** graph — on KB miss, asks user approval → Jina deep research → LLM dedup → pgvector ingest; on reject, web-search fallback with nothing stored
 - **Destination-scoped RAG** via pgvector (`build_destination_retriever`) with Tavily web-search fallback
 - **`kb_destinations`** table tracking per-city indexing status (`building` / `ready` / `failed`)
+- **Itinerary persistence** — finished plans stored in the `itineraries` table (markdown + requirements + day clusters) as per-session version history
+- **Real travel data providers** (opt-in) — free OSM adapters for POI geocoding (`PLACES_PROVIDER=osm`, Nominatim) and routed leg times (`TRANSIT_PROVIDER=osrm`); per-provider flags with graceful web-search fallback, flights/hotels seam ready for keyed providers
 
 ### Platform (shared infrastructure)
 
@@ -175,7 +177,7 @@ This project intentionally prefers `.env` values over stale process-level enviro
 - **LLM:** `DEFAULT_LLM_PROVIDER`, `DEFAULT_MODEL_NAME`, provider API keys
 - **Agent limits:** `AGENT_MAX_CONTEXT_TOKENS`, `MAX_TOOL_OUTPUT_CHARS`, memory-summary vars
 - **Research:** `TAVILY_API_KEY`, `PGVECTOR_ENABLED`, embedding/vector vars
-- **Travel guide:** `TRAVEL_PLANNER_ENABLED`, `JINA_API_KEY`, `INGESTION_SERVICE_URL`, specialist model overrides
+- **Travel guide:** `TRAVEL_PLANNER_ENABLED`, `JINA_API_KEY`, `INGESTION_SERVICE_URL`, specialist model overrides, travel provider flags (`PLACES_PROVIDER` / `TRANSIT_PROVIDER` / `FLIGHTS_PROVIDER` / `HOTELS_PROVIDER`)
 - **MCP:** `MCP_SERVERS` (JSON array of server specs)
 
 ## MCP Integration

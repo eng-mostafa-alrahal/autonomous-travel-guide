@@ -25,7 +25,7 @@ flowchart TD
 | `ingest` | async I/O | Send the cleaned segments to the `IngestionService`; store vectors in pgvector. On success marks `status = ready` + `doc_count`; on failure marks `status = failed`. |
 | `notify_complete` | sync | Emit an `AIMessage` telling the user the destination KB is ready. |
 
-The graph is **linear with one branch** (approve/reject) — no loops — so the state uses plain fields (no list reducers beyond the inherited `messages`).
+The graph is **linear with one branch** (approve/reject) — no loops — so the state uses plain fields (no list reducers beyond the inherited `messages`). The one exception: `phase` / `phase_status` carry the `merge_phase` reducer, shared with the planner/root states so parallel specialists can write progress concurrently (see [Travel Planner § progress reporting](./travel-planner.md)).
 
 ## State
 

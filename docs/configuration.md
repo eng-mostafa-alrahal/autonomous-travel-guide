@@ -100,6 +100,23 @@ These drive the travel-planner and knowledge-builder graphs.
 | `RESEARCHER_MODEL` | `` | Model override for the deep-research agent. |
 | `LOGISTICIAN_MODEL` | `` | Model override for the flights / travel & logistics agent. |
 
+### Travel data providers (Stage 10)
+
+Specialists source data from a real provider when configured, and fall back to web search (or the distance heuristic) on `none`, empty results, or any error — so CI and offline runs are unchanged by default.
+
+|| Var | Type | Default | Notes |
+|---|---|---|---|
+|| `PLACES_PROVIDER` | `osm` \| `none` | `none` | POI/geocoding for `city_expert` + `food` (real coordinates). `osm` = Nominatim. |
+|| `TRANSIT_PROVIDER` | `osrm` \| `none` | `none` | Real routed leg distance/time in `spatial_cluster`. `osrm` = OSRM routing. |
+|| `FLIGHTS_PROVIDER` | `none` | `none` | No live adapter yet — placeholder for e.g. `amadeus` once keys are registered. |
+|| `HOTELS_PROVIDER` | `none` | `none` | No live adapter yet — same extension seam as flights. |
+|| `NOMINATIM_BASE_URL` | str | `https://nominatim.openstreetmap.org` | Override to point at a self-hosted Nominatim. |
+|| `NOMINATIM_USER_AGENT` | str | `autonomous-travel-guide/0.1` | Nominatim's usage policy requires an identifiable User-Agent. |
+|| `OSRM_BASE_URL` | str | `https://router.project-osrm.org` | Override for a self-hosted OSRM. |
+|| `TRAVEL_PROVIDER_TIMEOUT_S` | float | `15.0` | Per-request timeout for provider HTTP calls. |
+
+Ports live in `modules/agent_orchestration/application/ports/travel_providers_port.py`; adapters + factory in `app/infrastructure/travel/`. Adding a provider = implement the port, add a `Literal` flag value, branch in `factory.py`. All of these are read at graph-compile time — see [Recompile-on-change](#recompile-on-change).
+
 ### Jina DeepSearch (deep research)
 
 | Var | Default | Notes |
@@ -199,6 +216,8 @@ Some settings only take effect when the compiled LangGraph is rebuilt. The orche
 - `VALIDATOR_MODEL`, `RESEARCHER_MODEL`, `LOGISTICIAN_MODEL`
 - `JINA_API_KEY` (bool), `JINA_DEEPSEARCH_MODEL`
 - `INGESTION_SERVICE_URL` (bool)
+- `PLACES_PROVIDER`, `TRANSIT_PROVIDER`, `FLIGHTS_PROVIDER`, `HOTELS_PROVIDER`
+- `NOMINATIM_BASE_URL`, `OSRM_BASE_URL`, `NOMINATIM_USER_AGENT`, `TRAVEL_PROVIDER_TIMEOUT_S`
 - `MCP_SERVERS` (JSON-normalised)
 
 When any of these change, the next request builds a fresh orchestrator with a new compiled graph. Other settings (log level, rate limits, CORS, etc.) apply immediately. MCP **tool bootstrap** is only performed at application startup — add/remove MCP servers requires an app restart.

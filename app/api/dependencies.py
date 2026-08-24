@@ -150,6 +150,16 @@ def _orchestrator_tool_config_sig(settings: Settings) -> tuple[object, ...]:
         bool(settings.JINA_API_KEY),
         settings.JINA_DEEPSEARCH_MODEL,
         bool(settings.INGESTION_SERVICE_URL),
+        # Travel providers are built at graph-compile time (Stage 10), so any of
+        # these changing must produce a fresh compiled graph.
+        settings.PLACES_PROVIDER,
+        settings.TRANSIT_PROVIDER,
+        settings.FLIGHTS_PROVIDER,
+        settings.HOTELS_PROVIDER,
+        settings.NOMINATIM_BASE_URL,
+        settings.OSRM_BASE_URL,
+        settings.NOMINATIM_USER_AGENT,
+        settings.TRAVEL_PROVIDER_TIMEOUT_S,
         mcp_sig,
     )
 

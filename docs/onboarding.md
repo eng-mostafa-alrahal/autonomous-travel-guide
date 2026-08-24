@@ -45,7 +45,7 @@ Two LangGraph subgraphs wired into one **travel master graph**:
 
 | Graph | Role |
 |---|---|
-| **Travel Planner** | Collects trip requirements (city, days, budget — HITL slot-filling), delegates to specialists (`city_expert`, `hotels`, `flights_logistics`, `food`), synthesises a day-by-day itinerary. |
+| **Travel Planner** | Collects trip requirements (city, days, budget — HITL slot-filling), runs specialists (`city_expert` first, then `hotels` / `flights_logistics` / `food` **in parallel**), clusters POIs into days, synthesises a day-by-day itinerary. |
 | **Knowledge Builder** | When the KB has no data for a destination: asks the user to approve a deep search → Jina DeepSearch → LLM dedup → ingest into pgvector → notify. On reject, the planner falls back to web search and **does not** store anything in the KB. |
 
 The **city expert** answers destination questions from destination-scoped RAG (`build_destination_retriever`) with a Tavily web-search fallback when evidence is thin.
@@ -220,7 +220,7 @@ Run the test suite to be sure:
 pytest -v
 ```
 
-Travel-specific graph tests live in `tests/unit/test_travel_planner.py`, `test_knowledge_builder.py`, `test_travel_master.py`, and `test_travel_master_e2e.py` — they run with fakes, no API keys required.
+Travel-specific graph tests live in `tests/unit/test_travel_planner.py`, `test_knowledge_builder.py`, `test_travel_master.py`, `test_travel_master_e2e.py`, `test_spatial_clustering.py`, `test_structured_specialists.py`, `test_itinerary_persistence.py`, and `test_travel_providers.py` — they run with fakes, no API keys required.
 
 (The e2e chat test against real LLMs is skipped by default unless `RUN_E2E=1` — see [`testing.md`](./testing.md).)
 
@@ -294,14 +294,15 @@ Inside the **Travel Planner**:
 flowchart LR
     Collect[collect_requirements] -->|missing| Ask[ask_requirements HITL]
     Ask --> Collect
-    Collect -->|complete| Del[delegate queue]
-    Del --> City[city_expert RAG]
-    Del --> Hotels[hotels]
-    Del --> Flights[flights_logistics]
-    Del --> Food[food]
+    Collect -->|complete| City[city_expert RAG]
     City -->|KB miss| EndEarly((END early))
-    City --> Del
-    Del --> Synth[synthesize_itinerary]
+    City -->|fan out via Send| Hotels[hotels]
+    City -->|fan out via Send| Flights[flights_logistics]
+    City -->|fan out via Send| Food[food]
+    Hotels --> Spatial[spatial_cluster]
+    Flights --> Spatial
+    Food --> Spatial
+    Spatial --> Synth[synthesize_itinerary]
 ```
 
 Inside the **Knowledge Builder**: `confirm_build` (HITL) → `deep_research` (Jina) → `deduplicate` → `ingest` (pgvector) → `notify_complete`.
@@ -346,7 +347,7 @@ Deeper dive: [`agent-orchestration.md`](./agent-orchestration.md).
 
 ### 5.4 Persistence model
 
-- App tables: `users`, `sessions`, `kb_destinations` (managed by Alembic, see [`data-model.md`](./data-model.md)).
+- App tables: `users`, `sessions`, `kb_destinations`, `itineraries` (managed by Alembic, see [`data-model.md`](./data-model.md)).
 - **pgvector** collection (`PGVECTOR_COLLECTION`, default `knowledge_base`) stores destination knowledge chunks with `destination_key` metadata for scoped RAG.
 - LangGraph checkpointer: same Postgres DB, schema auto‑provisioned on first run.
 - **`session.id` is reused as LangGraph's `thread_id`.** This is the glue between REST and the checkpointer — every chat call resumes the same thread.
@@ -423,8 +424,8 @@ sequenceDiagram
 
 6. **Travel mode only** — open these in order:
    - `travel_master_builder.py` — wires planner + knowledge builder + `after_build` re-plan loop.
-   - `subgraphs/travel_planner/travel_planner_graph.py` — requirements → delegate queue → specialists → itinerary.
-   - `subgraphs/travel_planner/nodes/specialists.py` — `city_expert` KB-miss detection (`kb_miss`, `route_after_city_expert`).
+   - `subgraphs/travel_planner/travel_planner_graph.py` — requirements → `city_expert` → parallel specialists (`Send`) → `spatial_cluster` → itinerary.
+   - `subgraphs/travel_planner/nodes/specialists.py` — `city_expert` KB-miss detection (`kb_miss`, fanned out by `fan_out_specialists`).
    - `subgraphs/knowledge_builder/knowledge_builder_graph.py` — `confirm_build` interrupt → Jina → dedup → ingest.
    - `domain/routing_rules/travel_root_router.py` + `travel_planner_router.py` — pure routing (unit-tested).
    - `infrastructure/research/jina_deepsearch_client.py` + `infrastructure/ingestion/` — external service adapters.
@@ -457,8 +458,8 @@ Reference doc: [`request-flow.md`](./request-flow.md).
 | Add a new agent prompt | New `.md.jinja` under `app/modules/agent_orchestration/infrastructure/prompts/<intent>/` + register the intent in `app/core/config/prompt_registry.toml` |
 | Add a new node to an existing subgraph | Edit that subgraph's builder + add a **pure** router function in `app/modules/agent_orchestration/domain/routing_rules/` |
 | Add a new subgraph (e.g. "planner") | Build & compile the subgraph, add it as a node in the supervisor graph, teach `delegate` it exists (prompt + literal in `next_agent`) |
-| Add a travel planner specialist | Add to `SPECIALISTS` in `travel_planner_router.py`, register a node in `travel_planner_graph.py`, add/extend a prompt under `prompts/travel_planner/` |
-| Change KB-miss / re-plan behaviour | `specialists.py` (`city_expert`), `travel_planner_router.route_after_city_expert`, `travel_root_router.route_after_planner`, `travel_master_builder.after_build` |
+| Add a travel planner specialist | Add the role to `PARALLEL_SPECIALISTS` in `travel_planner_router.py` (it joins the parallel fan-out), a schema to `ROLE_SCHEMAS` in `nodes/specialists.py`, register a node + edge to `spatial_cluster` in `travel_planner_graph.py`, add/extend a prompt under `prompts/travel_planner/` |
+| Change KB-miss / re-plan behaviour | `specialists.py` (`city_expert`), `travel_planner_router.fan_out_specialists`, `travel_root_router.route_after_planner`, `travel_master_builder.after_build` |
 | Swap deep-research provider | Implement `IDeepResearchClient`, inject in `_compile_travel` (today: `JinaDeepSearchClient`) |
 | Swap ingestion backend | `INGESTION_SERVICE_URL` → `HttpIngestionAdapter`; empty → `LocalPgVectorIngestionAdapter` via `build_ingestion_service()` |
 | Inspect KB build status for a city | `kb_destinations` table / `KBStatusService` — see [`data-model.md`](./data-model.md) |
@@ -565,9 +566,9 @@ For Docker / production where you want to override prompts without rebuilding th
 1. Add a Jinja template under `app/modules/agent_orchestration/infrastructure/prompts/travel_planner/`.
 2. Register the intent in `app/core/config/prompt_registry.toml` and `domain/prompts/intent.py`.
 3. If it's a new specialist role:
-   - Add the name to `SPECIALISTS` in `domain/routing_rules/travel_planner_router.py`.
-   - Add a node in `travel_planner_graph.py` (reuse `make_specialist_node` or a custom factory).
-   - Wire the conditional edge from `delegate` in `route_specialist`.
+   - Add the role to `PARALLEL_SPECIALISTS` in `domain/routing_rules/travel_planner_router.py` — it joins the `Send` fan-out after `city_expert`.
+   - Add its output schema to `ROLE_SCHEMAS` (and a query template to `ROLE_QUERIES`) in `nodes/specialists.py`.
+   - Add a node in `travel_planner_graph.py` (reuse `make_specialist_node` or a custom factory) and an edge from it to `spatial_cluster`.
 
 See [`travel-planner.md`](./travel-planner.md) for the current pipeline and state fields.
 

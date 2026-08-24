@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.modules.agent_orchestration.domain.clustering import cluster_pois
+from app.modules.agent_orchestration.domain.clustering import cluster_pois_sync as cluster_pois
 from app.modules.agent_orchestration.domain.geo import haversine_km, travel_time_minutes
 from app.modules.agent_orchestration.domain.schemas.travel_plan import POI
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.travel_planner.nodes.spatial import (  # noqa: E501
@@ -107,3 +107,33 @@ async def test_spatial_node_groups_and_sets_phase():
     assert total_stops == 3
     assert result["phase"] == "planning"
     assert "Grouped 3 places into 2 day(s)" in result["phase_status"]
+
+
+async def test_cluster_pois_uses_real_transit_leg_when_provided():
+    """Stage 10: a transit provider overrides the haversine heuristic per leg."""
+    from app.modules.agent_orchestration.domain.clustering import cluster_pois
+
+    async def fake_leg(_f_lat, _f_lng, _t_lat, _t_lng):
+        return {"distance_km": 9.99, "travel_minutes": 42}
+
+    pois = [_poi("A", 35.0, 135.7), _poi("B", 35.001, 135.701)]
+    plan = await cluster_pois(
+        pois, num_days=1, anchor=(34.9858, 135.7585), leg_lookup=fake_leg
+    )
+    legs = plan.days[0].legs
+    assert legs and all(leg.distance_km == 9.99 for leg in legs)
+    assert all(leg.travel_minutes == 42 for leg in legs)
+
+
+async def test_cluster_pois_falls_back_when_leg_lookup_returns_none():
+    from app.modules.agent_orchestration.domain.clustering import cluster_pois
+
+    async def no_route(_f_lat, _f_lng, _t_lat, _t_lng):
+        return None
+
+    pois = [_poi("A", 35.0, 135.7)]
+    plan = await cluster_pois(
+        pois, num_days=1, anchor=(34.9858, 135.7585), leg_lookup=no_route
+    )
+    # Heuristic distance (haversine) is used instead of a routed value.
+    assert plan.days[0].legs[0].distance_km != 9.99

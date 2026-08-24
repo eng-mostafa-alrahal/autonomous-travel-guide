@@ -59,7 +59,7 @@ Everything else has sensible defaults. See [`configuration.md`](./configuration.
 alembic upgrade head
 ```
 
-This creates the `users` and `sessions` tables. LangGraph's Postgres checkpointer provisions its own tables lazily on first run.
+This creates the `users`, `sessions`, `kb_destinations`, and `itineraries` tables. LangGraph's Postgres checkpointer provisions its own tables lazily on first run.
 
 ## 6. Run the API
 

@@ -10,6 +10,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.modules.agent_orchestration.application.ports.travel_providers_port import (
+    ITransitProvider,
+)
 from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.clustering import cluster_pois
 from app.modules.agent_orchestration.domain.schemas.travel_plan import POI
@@ -43,7 +46,7 @@ def _anchor_from_hotels(outputs: dict[str, Any]) -> tuple[tuple[float, float] | 
     return None, ""
 
 
-def make_spatial_cluster_node():
+def make_spatial_cluster_node(transit_provider: ITransitProvider | None = None):
     async def spatial_cluster(state: TravelPlannerState) -> dict[str, Any]:
         requirements = state.get("requirements", {})
         outputs = state.get("specialist_outputs", {})
@@ -61,7 +64,15 @@ def make_spatial_cluster_node():
                 pois.append(poi)
 
         anchor, anchor_name = _anchor_from_hotels(outputs)
-        plan = cluster_pois(pois, num_days=num_days, anchor=anchor, anchor_name=anchor_name)
+        # When a real transit provider is configured (Stage 10), legs use routed
+        # distance/time; otherwise the haversine heuristic is kept per-leg.
+        plan = await cluster_pois(
+            pois,
+            num_days=num_days,
+            anchor=anchor,
+            anchor_name=anchor_name,
+            leg_lookup=transit_provider.leg if transit_provider else None,
+        )
         clusters = [day.model_dump() for day in plan.days]
 
         located = sum(1 for p in pois if p.lat is not None and p.lng is not None)

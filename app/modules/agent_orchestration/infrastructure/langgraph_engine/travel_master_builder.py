@@ -20,6 +20,10 @@ from app.modules.agent_orchestration.application.ports.deep_research_port import
 )
 from app.modules.agent_orchestration.application.ports.ingestion_port import IIngestionService
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
+from app.modules.agent_orchestration.application.ports.travel_providers_port import (
+    IPlacesProvider,
+    ITransitProvider,
+)
 from app.modules.agent_orchestration.application.use_cases.kb_status_service import KBStatusService
 from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.routing_rules.travel_root_router import (
@@ -54,6 +58,8 @@ def build_travel_master_graph(
     validator_llm: BaseChatModel | None = None,
     requirements_llm: BaseChatModel | None = None,
     logistician_llm: BaseChatModel | None = None,
+    transit_provider: ITransitProvider | None = None,
+    places_provider: IPlacesProvider | None = None,
 ) -> StateGraph:
     planner_subgraph = build_travel_planner_graph(
         llm,
@@ -62,6 +68,8 @@ def build_travel_master_graph(
         retriever_provider=retriever_provider,
         requirements_llm=requirements_llm,
         logistician_llm=logistician_llm,
+        transit_provider=transit_provider,
+        places_provider=places_provider,
     ).compile()
 
     knowledge_builder_subgraph = build_knowledge_builder_graph(

@@ -91,6 +91,20 @@ class Settings(BaseSettings):
     RESEARCHER_MODEL: str = ""
     LOGISTICIAN_MODEL: str = ""
 
+    # ── Travel data providers (Stage 10) ───────────────────────
+    # Per-provider selector; "none" (or an error) keeps the web-search fallback.
+    # Each specialist tries its provider first and degrades gracefully.
+    PLACES_PROVIDER: Literal["osm", "none"] = "none"
+    TRANSIT_PROVIDER: Literal["osrm", "none"] = "none"
+    FLIGHTS_PROVIDER: Literal["none"] = "none"  # e.g. "amadeus" once registered
+    HOTELS_PROVIDER: Literal["none"] = "none"
+    # Endpoints (defaults are the free public OpenStreetMap services).
+    NOMINATIM_BASE_URL: str = "https://nominatim.openstreetmap.org"
+    OSRM_BASE_URL: str = "https://router.project-osrm.org"
+    # Nominatim's usage policy requires an identifiable User-Agent.
+    NOMINATIM_USER_AGENT: str = "autonomous-travel-guide/0.1"
+    TRAVEL_PROVIDER_TIMEOUT_S: float = 15.0
+
     # ── Jina DeepSearch (deep research) ──────────────────────────
     JINA_API_KEY: str = ""
     JINA_DEEPSEARCH_MODEL: str = "jina-deepsearch-v1"

@@ -116,6 +116,15 @@ When a run finishes (non-interrupted), the orchestrator persists the plan to the
 
 > A follow-up **revision** turn (re-run only the specialists/days affected by an edit) is intentionally deferred. The stored `requirements` + `clusters` are the inputs that revision will diff against.
 
+## Real data providers (Stage 10)
+
+Specialists can source data from a **real provider** or fall back to web search. Each is gated by a per-provider flag (`PLACES_PROVIDER`, `TRANSIT_PROVIDER`, `FLIGHTS_PROVIDER`, `HOTELS_PROVIDER`); `"none"` — or any error / empty result — keeps the web-search / heuristic path, so **CI and offline runs are unchanged by default**.
+
+- **Contracts** (`application/ports/travel_providers_port.py`): `IPlacesProvider` (geocode + POI search), `ITransitProvider` (leg distance/time), `IFlightsProvider`, `IHotelsProvider`. They reuse the specialist schemas (`POI`, `HotelOption`, `FlightOption`) and return `None` to signal "fall back".
+- **Adapters** (`infrastructure/travel/`): `NominatimPlacesProvider` (free OpenStreetMap geocoding/POI search, sends an identifying `User-Agent`) and `OSRMTransitProvider` (free routing for real leg distance/time). `factory.py` builds the configured provider or returns `None`.
+- **Wiring**: `city_expert` and `food` enrich their POIs with real coordinates from the places provider (the LLM still supplies names/notes); `spatial_cluster` uses routed leg distance/time from the transit provider, falling back to the haversine heuristic per-leg. Clustering assignment/ordering stay heuristic (deterministic); only the displayed leg times become real.
+- **Flights/hotels**: no live adapter yet (they need registered provider keys) — the ports + flags + fallback are in place; add one by implementing the port, adding a `Literal` flag value, and branching in `factory.py`.
+
 ## Prompts
 
 Registered in `app/core/config/prompt_registry.toml`:

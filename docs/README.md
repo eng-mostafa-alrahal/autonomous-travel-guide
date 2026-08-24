@@ -28,7 +28,7 @@ The docs are intentionally **high level**. For file-by-file detail, read the sou
 | LangGraph graphs (travel mode + template supervisor) | [`agent-orchestration.md`](./agent-orchestration.md) |
 | All HTTP endpoints + SSE protocol | [`api-reference.md`](./api-reference.md) |
 | All environment variables | [`configuration.md`](./configuration.md) |
-| Database schema + `kb_destinations` + checkpointer | [`data-model.md`](./data-model.md) |
+| Database schema + `kb_destinations` + `itineraries` + checkpointer | [`data-model.md`](./data-model.md) |
 | Built-in tools + MCP tools | [`tools.md`](./tools.md) |
 | Docker, stage GCE deploy, Celery, production | [`deployment.md`](./deployment.md) |
 | Tests and how to run them | [`testing.md`](./testing.md) |
