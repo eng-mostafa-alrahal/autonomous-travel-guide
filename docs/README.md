@@ -26,7 +26,7 @@ The docs are intentionally **high level**. For file-by-file detail, read the sou
 | How the code is layered | [`architecture.md`](./architecture.md) |
 | What happens on `POST /chat/` | [`request-flow.md`](./request-flow.md) |
 | LangGraph graphs (travel mode + template supervisor) | [`agent-orchestration.md`](./agent-orchestration.md) |
-| All HTTP endpoints + SSE protocol | [`api-reference.md`](./api-reference.md) |
+| **Full HTTP API** (all 18 endpoints, schemas, SSE, errors, curl) | [`api-reference.md`](./api-reference.md) |
 | All environment variables | [`configuration.md`](./configuration.md) |
 | Database schema + `kb_destinations` + `itineraries` + checkpointer | [`data-model.md`](./data-model.md) |
 | Built-in tools + MCP tools | [`tools.md`](./tools.md) |

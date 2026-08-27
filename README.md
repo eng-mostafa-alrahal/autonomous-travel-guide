@@ -135,6 +135,9 @@ celery -A workers.celery_app worker --loglevel=info --concurrency=2
 
 All routes are prefixed with `/api/v1`.
 
+**Full documentation** (request/response schemas, curl examples, SSE protocol, error codes): [`docs/api-reference.md`](./docs/api-reference.md).  
+Interactive OpenAPI: <http://localhost:8000/docs>.
+
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Health check and service metadata |

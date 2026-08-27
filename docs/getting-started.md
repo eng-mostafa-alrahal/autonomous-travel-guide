@@ -103,8 +103,8 @@ curl -X POST http://localhost:8000/api/v1/chat/ \
 
 If the response includes `"interrupted": true`:
 
-- **Missing trip details** — resume with `POST /api/v1/runs/{thread_id}/resume` and `{"feedback": "..."}`.
-- **KB build approval** — resume with `{"action": "approve"}` (deep research + ingest) or `{"action": "reject"}` (web search only, nothing stored).
+- **Missing trip details** — resume with `POST /api/v1/runs/{thread_id}/resume` and `{"action":"approved","feedback":"..."}`.
+- **KB build approval** — resume with `{"action":"approved"}` (deep research + ingest) or `{"action":"rejected"}` (web search only, nothing stored).
 
 See [`travel-planner.md`](./travel-planner.md), [`knowledge-builder.md`](./knowledge-builder.md), and [`api-reference.md`](./api-reference.md#human-approval).
 

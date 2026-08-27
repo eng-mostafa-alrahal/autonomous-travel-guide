@@ -777,7 +777,7 @@ Read in this order — each builds on the previous:
 7. [`tools.md`](./tools.md) — adding built‑in tools, the bucketing policy, MCP basics.
 8. [`configuration.md`](./configuration.md) — every environment variable (travel / Jina / ingestion sections).
 9. [`data-model.md`](./data-model.md) — DB schema (`kb_destinations`), migrations, UoW, checkpointer.
-10. [`api-reference.md`](./api-reference.md) — full endpoint reference + SSE protocol + error shape.
+10. [`api-reference.md`](./api-reference.md) — full HTTP API for all 18 endpoints (schemas, curl, SSE, errors).
 11. [`testing.md`](./testing.md) — test layout, fixtures, conventions, coverage targets.
 12. [`deployment.md`](./deployment.md) — production checklist, **stage GCE + GitHub Actions**, Docker, Celery.
 13. [`architecture/mcp_integration.md`](./architecture/mcp_integration.md) — deep‑dive on MCP wiring and the filesystem sandbox.
