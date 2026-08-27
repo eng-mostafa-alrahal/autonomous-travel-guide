@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
+from app.modules.agent_orchestration.domain.phases import merge_phase
 from app.modules.agent_orchestration.domain.states.base_state import BaseAgentState
 
 
@@ -15,3 +18,6 @@ class KnowledgeBuilderState(BaseAgentState):
     research_sources: list[str]
     prepared_segments: list[dict[str, str]]
     doc_count: int
+    # Progress reporting (streamed as `stream_detail=phases` SSE events).
+    phase: Annotated[str | None, merge_phase]
+    phase_status: Annotated[str | None, merge_phase]

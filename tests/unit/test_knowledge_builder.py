@@ -61,6 +61,26 @@ def test_prepared_knowledge_defaults_empty():
     assert PreparedKnowledge.model_validate({}).segments == []
 
 
+def test_split_research_sections_on_h2():
+    from app.modules.agent_orchestration.domain.research_sections import (
+        split_research_sections,
+        topic_slug,
+    )
+
+    raw = "## History\n\nFounded in 753 BC.\n\n## Food\n\nTry cacio e pepe."
+    sections = split_research_sections(raw)
+    assert [label for label, _ in sections] == ["History", "Food"]
+    assert "753" in sections[0][1]
+    assert topic_slug("History, Culture & Identity") == "history_culture_identity"
+
+
+def test_split_research_sections_without_headings_keeps_all():
+    from app.modules.agent_orchestration.domain.research_sections import split_research_sections
+
+    raw = "One long report with no headings."
+    assert split_research_sections(raw) == [("full_destination_research", raw)]
+
+
 def test_knowledge_builder_graph_compiles():
     from app.core.config.settings import get_settings
     from app.modules.agent_orchestration.application.ports.deep_research_port import (

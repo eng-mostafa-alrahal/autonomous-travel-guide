@@ -24,6 +24,12 @@ from app.core.observability.request_context import get_request_id
 from app.infrastructure.database.postgres.unit_of_work import SqlAlchemyUnitOfWork
 from app.infrastructure.ingestion.factory import build_ingestion_service
 from app.infrastructure.research.jina_deepsearch_client import JinaDeepSearchClient
+from app.infrastructure.travel.factory import (
+    build_flights_provider,
+    build_hotels_provider,
+    build_places_provider,
+    build_transit_provider,
+)
 from app.modules.agent_orchestration.application.dtos.agent_result import (
     AgentEvent,
     AgentRunResult,
@@ -34,6 +40,9 @@ from app.modules.agent_orchestration.application.ports.agent_orchestrator_port i
 )
 from app.modules.agent_orchestration.application.ports.llm_registry_port import ILLMRegistry
 from app.modules.agent_orchestration.application.ports.tool_registry_port import IToolRegistry
+from app.modules.agent_orchestration.application.use_cases.itinerary_service import (
+    ItineraryService,
+)
 from app.modules.agent_orchestration.application.use_cases.kb_status_service import (
     KBStatusService,
 )
@@ -77,6 +86,8 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         self._llm_registry = llm_registry
         self._tool_registry = tool_registry
         self._compiled: CompiledStateGraph | None = None
+        # Stage 9: persist finished itineraries (best-effort; never fails a turn).
+        self._itineraries = ItineraryService(uow_factory=SqlAlchemyUnitOfWork)
 
     def _compile(self) -> CompiledStateGraph:
         if self._compiled is not None:
@@ -165,7 +176,8 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         )
 
         def retriever_provider(destination_key: str) -> Any:
-            if not (settings.PGVECTOR_ENABLED and settings.OPENAI_API_KEY and destination_key):
+            embedding_key = settings.EMBEDDING_API_KEY or settings.OPENAI_API_KEY
+            if not (settings.PGVECTOR_ENABLED and embedding_key and destination_key):
                 return None
             try:
                 from app.infrastructure.database.postgres.vector_store import (
@@ -185,6 +197,12 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         )
         ingestion_service = build_ingestion_service(settings)
         kb_status_service = KBStatusService(uow_factory=SqlAlchemyUnitOfWork)
+        # Stage 10: real/mock providers (None ⇒ web-search / heuristic fallback).
+        # TRAVEL_MOCK_APIS forces the offline fixture pack for all four.
+        transit_provider = build_transit_provider(settings)
+        places_provider = build_places_provider(settings)
+        hotels_provider = build_hotels_provider(settings)
+        flights_provider = build_flights_provider(settings)
 
         master = build_travel_master_graph(
             llm=llm,
@@ -196,6 +214,12 @@ class MainGraphOrchestrator(IAgentOrchestrator):
             retriever_provider=retriever_provider,
             validator_llm=_opt_model(settings.VALIDATOR_MODEL),
             logistician_llm=_opt_model(settings.LOGISTICIAN_MODEL),
+            transit_provider=transit_provider,
+            places_provider=places_provider,
+            hotels_provider=hotels_provider,
+            flights_provider=flights_provider,
+            kb_research_calls=settings.KB_RESEARCH_CALLS,
+            kb_research_max_concurrency=settings.KB_RESEARCH_MAX_CONCURRENCY,
         )
 
         checkpointer = get_postgres_saver()
@@ -221,12 +245,13 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         if get_settings().TRAVEL_PLANNER_ENABLED:
             return {
                 **base,
+                "phase": None,
+                "phase_status": None,
                 "requirements": {},
                 "requirements_complete": False,
                 "missing_slots": [],
-                "pending_specialists": [],
-                "next_specialist": None,
                 "specialist_outputs": {},
+                "clusters": [],
                 "itinerary": None,
                 "destination_key": "",
                 "city": None,
@@ -237,8 +262,9 @@ class MainGraphOrchestrator(IAgentOrchestrator):
                 "research_sources": [],
                 "prepared_segments": [],
                 "doc_count": 0,
-                "kb_miss": False,
-                "kb_build_attempted": False,
+                # Do NOT seed kb_miss / kb_build_attempted here. Re-seeding
+                # kb_build_attempted=False on every /chat turn used to wipe the
+                # sticky flag (before keep_true) and re-ask to build an existing KB.
             }
         return {
             **base,
@@ -257,9 +283,35 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         state: Any,
         *,
         thread_id: str,
+        user_id: str,
     ) -> AgentRunResult:
         snapshot = await graph.aget_state(config)
-        return to_run_result(state, snapshot, thread_id=thread_id)
+        result = to_run_result(state, snapshot, thread_id=thread_id)
+        await self._save_itinerary(result, snapshot, thread_id=thread_id, user_id=user_id)
+        return result
+
+    async def _save_itinerary(
+        self,
+        result: AgentRunResult,
+        snapshot: Any,
+        *,
+        thread_id: str,
+        user_id: str,
+    ) -> None:
+        """Persist the finished itinerary (travel mode only, non-interrupted runs)."""
+        if not get_settings().TRAVEL_PLANNER_ENABLED or result.interrupted:
+            return
+        values = getattr(snapshot, "values", None) or {}
+        itinerary = values.get("itinerary")
+        if not itinerary:
+            return
+        await self._itineraries.save_completed(
+            session_id=thread_id,
+            user_id=user_id,
+            itinerary=itinerary,
+            requirements=values.get("requirements") or {},
+            clusters=values.get("clusters") or [],
+        )
 
     # ── IAgentOrchestrator implementation ────────────────────────
 
@@ -276,7 +328,9 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         initial_state = self._build_initial_state(user_message, session_id, user_id)
         config = self._config_for(session_id)
         state = await graph.ainvoke(initial_state, config=config)
-        result = await self._result_from(graph, config, state, thread_id=session_id)
+        result = await self._result_from(
+            graph, config, state, thread_id=session_id, user_id=user_id
+        )
         elapsed_ms = (perf_counter() - started) * 1000
         logger.info(
             "graph.invoke completed request_id=%s thread_id=%s interrupted=%s elapsed_ms=%.1f",
@@ -301,8 +355,13 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         graph = self._compile()
         initial_state = self._build_initial_state(user_message, session_id, user_id)
         config = self._config_for(session_id)
-        async for chunk in graph.astream(initial_state, config=config):
-            for event in to_agent_events(chunk):
+        # ``subgraphs=True`` surfaces nodes inside the planner / knowledge-builder
+        # subgraphs, which is where phase progress originates. Consumers that only
+        # want master-level events filter on the (empty) event namespace.
+        async for namespace, chunk in graph.astream(
+            initial_state, config=config, subgraphs=True
+        ):
+            for event in to_agent_events(chunk, namespace=namespace):
                 now = perf_counter()
                 event_count += 1
                 delta_ms = (now - last_event_at) * 1000
@@ -358,8 +417,9 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         if feedback:
             resume_value["feedback"] = feedback
 
+        user_id = str((snapshot.values or {}).get("user_id") or "")
         state = await graph.ainvoke(Command(resume=resume_value), config=config)
-        result = await self._result_from(graph, config, state, thread_id=thread_id)
+        result = await self._result_from(graph, config, state, thread_id=thread_id, user_id=user_id)
         elapsed_ms = (perf_counter() - started) * 1000
         logger.info(
             (

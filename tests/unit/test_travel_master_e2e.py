@@ -32,6 +32,14 @@ from app.modules.agent_orchestration.domain.schemas.knowledge_prep import (
     KnowledgeSegment,
     PreparedKnowledge,
 )
+from app.modules.agent_orchestration.domain.schemas.travel_plan import (
+    POI,
+    FlightOption,
+    FlightOptionList,
+    HotelOption,
+    HotelOptionList,
+    POIList,
+)
 from app.modules.agent_orchestration.domain.schemas.trip_requirements import TripRequirements
 
 
@@ -47,10 +55,27 @@ class _FakeStructured:
 
     async def ainvoke(self, *_a: Any, **_k: Any) -> Any:
         if self._schema is TripRequirements:
-            return TripRequirements(destination_city="Atlantis", num_days=3, budget="$1500")
+            return TripRequirements(
+                destination_city="Atlantis",
+                origin_city="Metropolis",
+                num_days=3,
+                budget="$1500",
+            )
         if self._schema is PreparedKnowledge:
             return PreparedKnowledge(
                 segments=[KnowledgeSegment(topic="history", content="Atlantis lore.")]
+            )
+        if self._schema is POIList:
+            return POIList(
+                items=[POI(name="Poseidon Temple", category="landmark", lat=36.3, lng=25.4)]
+            )
+        if self._schema is HotelOptionList:
+            return HotelOptionList(
+                items=[HotelOption(name="Coral Suites", area="Harbor", nightly_rate_usd=180)]
+            )
+        if self._schema is FlightOptionList:
+            return FlightOptionList(
+                items=[FlightOption(summary="Ferry + flight via Athens", price_usd=320)]
             )
         return self._schema()
 
@@ -139,8 +164,6 @@ def _initial_state(message: str) -> dict[str, Any]:
         "requirements": {},
         "requirements_complete": False,
         "missing_slots": [],
-        "pending_specialists": [],
-        "next_specialist": None,
         "specialist_outputs": {},
         "itinerary": None,
         "destination_key": "",
@@ -176,9 +199,51 @@ async def test_kb_miss_approve_replans_and_produces_itinerary():
     assert not final.next, "graph should be finished"
     assert ingest_state["ingested"] is True  # KB populated on approval
     assert final.values["kb_build_attempted"] is True
-    assert final.values["doc_count"] == 1
+    # Research report kept verbatim + one LLM extra chapter from the fake enrich step.
+    assert final.values["doc_count"] >= 1
     assert final.values["itinerary"]
     assert "city_expert" in final.values["specialist_outputs"]
+    # Stage 8: the parallel specialists fanned out and merged their outputs.
+    assert {"hotels", "flights_logistics", "food"} <= set(final.values["specialist_outputs"])
+    assert final.values["clusters"], "spatial clustering should run after the specialists"
+
+
+async def test_stream_reports_phase_progress_from_inside_subgraphs():
+    """Phase lines must reach the stream while the slow work is still ahead."""
+    from app.modules.agent_orchestration.infrastructure.langgraph_engine.mappers.state_mapper import (  # noqa: E501
+        to_agent_events,
+    )
+
+    ingest_state = {"ingested": False}
+    app = _build_compiled(ingest_state)
+    config = {"configurable": {"thread_id": "trip-3"}}
+
+    async def collect(graph_input: Any) -> list[tuple[str | None, str]]:
+        seen: list[tuple[str | None, str]] = []
+        async for namespace, chunk in app.astream(graph_input, config, subgraphs=True):
+            for event in to_agent_events(chunk, namespace=namespace):
+                if event.phase_status and (event.phase, event.phase_status) not in seen:
+                    seen.append((event.phase, event.phase_status))
+        return seen
+
+    first_pass = await collect(_initial_state("Plan me 3 days in Atlantis, budget $1500"))
+    statuses = [status for _phase, status in first_pass]
+
+    # Requirements -> KB miss, all before the interrupt. (city_expert now runs
+    # first as the gate; on a KB miss it short-circuits to the build request.)
+    assert ("requirements", "Getting started on your trip plan.") in first_pass
+    assert any("bringing in the specialists" in s for s in statuses)
+    assert any("asking to run deep research" in s for s in statuses)
+
+    second_pass = await collect(Command(resume={"action": "approve"}))
+    build_statuses = [status for _phase, status in second_pass]
+
+    # The long research/ingest steps announce themselves before they run.
+    assert any("this can take a few minutes" in s for s in build_statuses)
+    assert any("Expanding the research with extra guidebook chapters" in s for s in build_statuses)
+    assert any("Knowledge base ready" in s for s in build_statuses)
+    assert any("Re-planning" in s for s in build_statuses)
+    assert ("done", "Your itinerary is ready.") in second_pass
 
 
 async def test_kb_miss_reject_uses_web_fallback_without_storing():

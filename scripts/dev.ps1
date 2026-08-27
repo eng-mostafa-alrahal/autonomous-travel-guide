@@ -13,4 +13,4 @@ if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }
 
-uv run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory

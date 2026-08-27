@@ -22,10 +22,20 @@ def build_pgvector_store() -> PGVector:
     """
     settings = get_settings()
 
+    # EMBEDDING_BASE_URL lets us point the OpenAI-compatible client at Jina
+    # (https://api.jina.ai/v1) so ingest-time late-chunking vectors (Jina v3)
+    # match the query-time vectors. Empty base URL = default OpenAI endpoint.
+    #
+    # Jina rejects the token-id batches LangChain sends when
+    # check_embedding_ctx_length=True (OpenAI-only tokenization path) — that
+    # made every city_expert retrieval return empty and re-trigger KB builds.
+    base_url = settings.EMBEDDING_BASE_URL or None
     embeddings = OpenAIEmbeddings(
         model=settings.EMBEDDING_MODEL,
         dimensions=settings.EMBEDDING_DIMENSIONS,
-        api_key=settings.OPENAI_API_KEY,
+        api_key=settings.EMBEDDING_API_KEY or settings.OPENAI_API_KEY,
+        base_url=base_url,
+        check_embedding_ctx_length=base_url is None,
     )
 
     connection_string = settings.get_database_sync_url()

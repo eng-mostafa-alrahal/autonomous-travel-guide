@@ -21,9 +21,15 @@ def build_ingestion_service(settings: Settings) -> IIngestionService:
             api_key=settings.INGESTION_SERVICE_API_KEY,
             embedding_model=settings.EMBEDDING_MODEL,
             embedding_dimensions=settings.EMBEDDING_DIMENSIONS,
+            embedder_provider=settings.INGESTION_EMBEDDER_PROVIDER,
+            macro_splitter=settings.INGESTION_MACRO_SPLITTER,
+            embedding_pipeline=settings.INGESTION_EMBEDDING_PIPELINE,
+            late_chunk_min_tokens=settings.INGESTION_LATE_CHUNK_MIN_TOKENS,
+            late_chunk_max_tokens=settings.INGESTION_LATE_CHUNK_MAX_TOKENS,
             request_timeout_s=settings.INGESTION_SERVICE_TIMEOUT_S,
             poll_timeout_s=settings.INGESTION_POLL_TIMEOUT_S,
             poll_interval_s=settings.INGESTION_POLL_INTERVAL_S,
+            max_concurrency=settings.INGESTION_MAX_CONCURRENCY,
         )
 
     from app.infrastructure.ingestion.local_pgvector_ingestion import (

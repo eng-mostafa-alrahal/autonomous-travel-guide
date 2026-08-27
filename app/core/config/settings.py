@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     REDIS_USER_NAME: str = "default"
     REDIS_PASSWORD: str = ""
     REDIS_DB: int = 0
-    REDIS_SSL: bool = True
+    REDIS_SSL: bool = False
     REDIS_URL: str | None = None
 
     # ── JWT / Auth ───────────────────────────────────────────────
@@ -71,8 +71,14 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("TAVILY_API_KEY", "TAVILY_KEY"),
     )
-    EMBEDDING_MODEL: str = "text-embedding-3-small"
-    EMBEDDING_DIMENSIONS: int = 1536
+    EMBEDDING_MODEL: str = "jina-embeddings-v3"
+    EMBEDDING_DIMENSIONS: int = 1024
+    # Query-time embedder credentials. When EMBEDDING_BASE_URL points at Jina's
+    # OpenAI-compatible endpoint (https://api.jina.ai/v1), set EMBEDDING_API_KEY
+    # to the Jina key (JINA_API_KEY is NOT reused implicitly). Both empty falls
+    # back to OPENAI_API_KEY against the default OpenAI endpoint.
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_BASE_URL: str = ""
     PGVECTOR_COLLECTION: str = "knowledge_base"
     # Enable when PostgreSQL has pgvector extension support
     # (e.g., pgvector/pgvector image). Off by default for local Postgres.
@@ -91,11 +97,35 @@ class Settings(BaseSettings):
     RESEARCHER_MODEL: str = ""
     LOGISTICIAN_MODEL: str = ""
 
+    # ── Travel data providers (Stage 10) ───────────────────────
+    # When true, every travel provider is the offline mock fixture pack
+    # (London/Paris/Rome/Berlin/New York/Damascus/Los Angeles). Does NOT
+    # skip the knowledge-builder path — city_expert still detects KB misses.
+    TRAVEL_MOCK_APIS: bool = False
+    # Per-provider selector; "none" (or an error) keeps the web-search fallback.
+    # Each specialist tries its provider first and degrades gracefully.
+    # Ignored when TRAVEL_MOCK_APIS=true.
+    PLACES_PROVIDER: Literal["osm", "none"] = "none"
+    TRANSIT_PROVIDER: Literal["osrm", "none"] = "none"
+    FLIGHTS_PROVIDER: Literal["none"] = "none"  # e.g. "amadeus" once registered
+    HOTELS_PROVIDER: Literal["none"] = "none"
+    # Endpoints (defaults are the free public OpenStreetMap services).
+    NOMINATIM_BASE_URL: str = "https://nominatim.openstreetmap.org"
+    OSRM_BASE_URL: str = "https://router.project-osrm.org"
+    # Nominatim's usage policy requires an identifiable User-Agent.
+    NOMINATIM_USER_AGENT: str = "autonomous-travel-guide/0.1"
+    TRAVEL_PROVIDER_TIMEOUT_S: float = 15.0
+
     # ── Jina DeepSearch (deep research) ──────────────────────────
     JINA_API_KEY: str = ""
     JINA_DEEPSEARCH_MODEL: str = "jina-deepsearch-v1"
     JINA_DEEPSEARCH_TIMEOUT_S: int = 300
-    JINA_DEEPSEARCH_REASONING_EFFORT: Literal["low", "medium", "high"] = "medium"
+    JINA_DEEPSEARCH_REASONING_EFFORT: Literal["low", "medium", "high"] = "high"
+    # Research breadth: 1 = one combined brief; N>1 = N concurrent topic-cluster
+    # briefs (see RESEARCH_TOPIC_CLUSTERS in the knowledge-builder graph). More
+    # calls = broader/deeper KB, more DeepSearch quota, longer builds.
+    KB_RESEARCH_CALLS: int = 6
+    KB_RESEARCH_MAX_CONCURRENCY: int = 3
 
     # ── Ingestion Service (RAG Document Processor) ───────────────
     # External embedding/ingestion service. Leave INGESTION_SERVICE_URL empty
@@ -105,6 +135,15 @@ class Settings(BaseSettings):
     INGESTION_SERVICE_TIMEOUT_S: int = 60
     INGESTION_POLL_TIMEOUT_S: int = 300
     INGESTION_POLL_INTERVAL_S: float = 2.0
+    # Must stay consistent with the query-time embedder in build_pgvector_store().
+    # late_chunking is Jina-only on the service side, so it requires provider=jina.
+    INGESTION_EMBEDDING_PIPELINE: Literal["late_chunking", "chunk_then_embed"] = "late_chunking"
+    INGESTION_EMBEDDER_PROVIDER: Literal["openai", "jina"] = "jina"
+    INGESTION_MACRO_SPLITTER: Literal["recursive", "semantic", "token_aware"] = "semantic"
+    INGESTION_LATE_CHUNK_MIN_TOKENS: int = 800
+    INGESTION_LATE_CHUNK_MAX_TOKENS: int = 2000
+    # Segments are submitted as independent jobs; this bounds them in flight.
+    INGESTION_MAX_CONCURRENCY: int = 4
 
     # Overall budget for a single agent graph run (deep research can be slow).
     AGENT_GRAPH_TIMEOUT_S: int = 900

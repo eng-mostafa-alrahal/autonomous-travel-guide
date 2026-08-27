@@ -13,6 +13,8 @@
         "--port",
         "8001",
         "--reload",
+        "--loop",
+        "app.core.event_loop:selector_loop_factory",
         "--log-level",
         "debug",
         "--access-log"

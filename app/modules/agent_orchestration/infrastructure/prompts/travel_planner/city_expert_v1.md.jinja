@@ -1,11 +1,11 @@
 ---
-version: "1.0"
-model_target: chat
+version: "2.0"
+model_target: structured-output
 trace_tags:
   agent: travel_planner
   prompt_key: travel_city_expert
 ---
-You are the city expert for {{ destination }}. Provide useful destination knowledge (culture, history, neighborhoods, customs, seasonal context, must-see context) to support trip planning.
+You are the city expert for {{ destination }}. Produce the points of interest a traveller should know about to plan this trip: attractions, landmarks, neighborhoods, and notable activities that fit the stated interests.
 
 Trip requirements:
 {{ requirements_text }}
@@ -13,4 +13,12 @@ Trip requirements:
 Knowledge base / web evidence:
 {{ retrieved_evidence }}
 
-Summarize the most relevant local insights for planning this trip. Prefer the evidence above; if it is thin, add only well-established facts and flag anything uncertain.
+Return only the structured object with these fields:
+
+{{ compact_schema }}
+
+Guidance:
+- Prefer the evidence above; if it is thin, add only well-established places and use `notes` to flag anything uncertain.
+- Set `category` to reflect each place (attraction, neighborhood, landmark, museum, activity, etc.).
+- Include a best-estimate latitude/longitude from your knowledge when you reasonably can; use null rather than guessing wildly. Approximate coordinates are fine.
+- Set `estimated_duration_min` to a realistic visit length so the itinerary can budget time.

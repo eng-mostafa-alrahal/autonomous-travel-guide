@@ -21,12 +21,14 @@ class ChatRequest(BaseModel):
         description="Target conversation session ID (UUIDv7).",
         examples=["019d92bc-2c73-74e6-814a-b647e46f0bf5"],
     )
-    stream_detail: Literal["content", "full"] = Field(
+    stream_detail: Literal["content", "full", "phases"] = Field(
         default="content",
         description=(
             "For POST /chat/stream only: `content` (default) emits a small JSON per chunk "
             "(`node`, `assistant` with the latest AI reply and optional usage/tool_calls). "
-            "`full` sends the raw per-node state (full message list, session_id, reasoning, etc.)."
+            "`full` sends the raw per-node state (full message list, session_id, reasoning, etc.). "
+            "`phases` sends the same content chunks plus `{phase, status}` progress lines "
+            "(e.g. while the knowledge base is being built)."
         ),
     )
 

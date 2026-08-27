@@ -9,6 +9,7 @@ Boot the API, run a chat, and make sure everything is wired correctly.
 - **`uv`** package manager ([install](https://docs.astral.sh/uv/))
 - **Node.js** (only if you plan to use stdio MCP servers like the filesystem MCP)
 - At least one LLM provider API key (OpenAI, Anthropic, or Gemini)
+- For travel mode: **Tavily** (`TAVILY_API_KEY`) and **Jina** (`JINA_API_KEY`) for web search and deep research
 
 ## 2. Start infrastructure
 
@@ -45,6 +46,10 @@ Open `.env` and set **at minimum**:
 - `OPENAI_API_KEY` **or** `ANTHROPIC_API_KEY` **or** `GOOGLE_API_KEY`.
 - `DEFAULT_LLM_PROVIDER` — must match the provider above (`openai` | `anthropic` | `gemini`).
 - `DEFAULT_MODEL_NAME` — a model ID valid for that provider.
+- `TRAVEL_PLANNER_ENABLED=true` — enables the travel guide graphs (recommended for this project).
+- `PGVECTOR_ENABLED=true` + `OPENAI_API_KEY` — destination RAG for the city expert.
+- `TAVILY_API_KEY` — web search for specialists and fallback.
+- `JINA_API_KEY` — deep research when building a new destination KB.
 
 Everything else has sensible defaults. See [`configuration.md`](./configuration.md) for the full reference.
 
@@ -54,7 +59,7 @@ Everything else has sensible defaults. See [`configuration.md`](./configuration.
 alembic upgrade head
 ```
 
-This creates the `users` and `sessions` tables. LangGraph's Postgres checkpointer provisions its own tables lazily on first run.
+This creates the `users`, `sessions`, `kb_destinations`, and `itineraries` tables. LangGraph's Postgres checkpointer provisions its own tables lazily on first run.
 
 ## 6. Run the API
 
@@ -68,7 +73,9 @@ This creates the `users` and `sessions` tables. LangGraph's Postgres checkpointe
 
 Open <http://localhost:8000/docs> for the interactive OpenAPI UI.
 
-## 7. First end-to-end chat
+## 7. First trip plan (travel mode)
+
+With `TRAVEL_PLANNER_ENABLED=true`, chat starts the **Travel Planner**:
 
 ```bash
 # 1) Register
@@ -85,16 +92,23 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 curl -X POST http://localhost:8000/api/v1/sessions/ \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"title":"first chat"}'
+  -d '{"title":"Paris trip"}'
 
-# 4) Chat (replace $SESSION_ID)
+# 4) Plan a trip (replace $SESSION_ID)
 curl -X POST http://localhost:8000/api/v1/chat/ \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"session_id":"'$SESSION_ID'","message":"Hi, what time is it in Tokyo?"}'
+  -d '{"session_id":"'$SESSION_ID'","message":"Plan 5 days in Paris, budget mid-range"}'
 ```
 
-If the final response includes `"interrupted": true`, the agent is waiting for human approval — see [`agent-orchestration.md`](./agent-orchestration.md#human-in-the-loop-hitl) and [`api-reference.md`](./api-reference.md#human-approval).
+If the response includes `"interrupted": true`:
+
+- **Missing trip details** — resume with `POST /api/v1/runs/{thread_id}/resume` and `{"feedback": "..."}`.
+- **KB build approval** — resume with `{"action": "approve"}` (deep research + ingest) or `{"action": "reject"}` (web search only, nothing stored).
+
+See [`travel-planner.md`](./travel-planner.md), [`knowledge-builder.md`](./knowledge-builder.md), and [`api-reference.md`](./api-reference.md#human-approval).
+
+> **Template mode** (`TRAVEL_PLANNER_ENABLED=false`): use a generic message like `"Hi, what time is it in Tokyo?"` to exercise the supervisor graph instead.
 
 ## 8. Run the tests
 
@@ -114,6 +128,8 @@ Use this path when you want agent runs deferred out of the HTTP request cycle. S
 
 ## Next steps
 
+- Read [`onboarding.md`](./onboarding.md) for the full new-developer guide (architecture tour, recipes, debugging).
+- Read [`travel-planner.md`](./travel-planner.md) and [`knowledge-builder.md`](./knowledge-builder.md) for the two core graphs.
 - Read [`architecture.md`](./architecture.md) to understand why the code is organised the way it is.
-- Read [`agent-orchestration.md`](./agent-orchestration.md) to see how the LangGraph supervisor routes to specialist subgraphs.
-- Read [`tools.md`](./tools.md) to add your own tool or plug in an MCP server.
+- Read [`agent-orchestration.md`](./agent-orchestration.md) for travel mode and template supervisor internals.
+- Read [`deployment.md`](./deployment.md) to deploy the `stage` branch to GCE via GitHub Actions.

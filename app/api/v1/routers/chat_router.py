@@ -51,6 +51,13 @@ def _event_has_message_content(messages: list[AgentMessage]) -> bool:
     return any(bool(m.content) or bool(m.tool_calls) for m in messages)
 
 
+def _phase_payload(event: AgentEvent) -> dict[str, Any] | None:
+    """Progress line for `stream_detail=phases`, or None when the event has none."""
+    if not event.phase_status:
+        return None
+    return {"phase": event.phase, "status": event.phase_status}
+
+
 def _compact_event_payload(event: AgentEvent) -> dict[str, Any] | None:
     last_ai: AgentMessage | None = next(
         (
@@ -132,21 +139,36 @@ async def chat_stream(
         started = perf_counter()
         chunk_count = 0
         detail = body.stream_detail
+        last_phase: dict[str, Any] | None = None
         async for event in uc.execute(
             body.message,
             session_id=str(body.session_id),
             user_id=str(user_id),
         ):
-            if detail == "full":
-                if not (_event_has_message_content(event.messages) or event.updates):
-                    continue
-                payload: dict[str, Any] | None = event.model_dump()
-            else:
-                payload = _compact_event_payload(event)
-                if payload is None:
-                    continue
-            chunk_count += 1
-            yield f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+            payloads: list[dict[str, Any]] = []
+
+            # Progress lines come from inside the subgraphs too; the parent graph
+            # replays the same values, so only emit when the line actually changes.
+            if detail == "phases":
+                phase_payload = _phase_payload(event)
+                if phase_payload is not None and phase_payload != last_phase:
+                    last_phase = phase_payload
+                    payloads.append(phase_payload)
+
+            # Message content is only taken from master-level events, otherwise a
+            # subgraph reply would be sent twice (once nested, once aggregated).
+            if not event.namespace:
+                if detail == "full":
+                    if _event_has_message_content(event.messages) or event.updates:
+                        payloads.append(event.model_dump())
+                else:
+                    content_payload = _compact_event_payload(event)
+                    if content_payload is not None:
+                        payloads.append(content_payload)
+
+            for payload in payloads:
+                chunk_count += 1
+                yield f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
         elapsed_ms = (perf_counter() - started) * 1000
         logger.info(
             (

@@ -6,11 +6,12 @@ import json
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Header
+from fastapi import Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config.di_container import get_container
 from app.core.config.settings import Settings, get_settings
-from app.core.exceptions import MCPBootstrapError
+from app.core.exceptions import AuthenticationError, MCPBootstrapError
 from app.core.security.jwt_service import verify_access_token
 from app.infrastructure.database.postgres.unit_of_work import SqlAlchemyUnitOfWork
 from app.modules.agent_orchestration.application.ports.agent_orchestrator_port import (
@@ -33,17 +34,20 @@ from app.modules.agent_orchestration.infrastructure.registries.tool_registry imp
 from app.modules.sessions.use_cases.session_service import SessionService
 from app.modules.users.use_cases.user_service import UserService
 
+_bearer = HTTPBearer(auto_error=False)
+
 
 # ── Auth dependency ──────────────────────────────────────────────
 async def get_current_user_id(
-    authorization: Annotated[str, Header()],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> UUID:
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        from app.core.exceptions import AuthenticationError
-
+    if (
+        credentials is None
+        or credentials.scheme.lower() != "bearer"
+        or not credentials.credentials
+    ):
         raise AuthenticationError("Missing or malformed Authorization header.")
-    return verify_access_token(token)
+    return verify_access_token(credentials.credentials)
 
 
 # ── UoW ──────────────────────────────────────────────────────────
@@ -150,6 +154,17 @@ def _orchestrator_tool_config_sig(settings: Settings) -> tuple[object, ...]:
         bool(settings.JINA_API_KEY),
         settings.JINA_DEEPSEARCH_MODEL,
         bool(settings.INGESTION_SERVICE_URL),
+        # Travel providers are built at graph-compile time (Stage 10), so any of
+        # these changing must produce a fresh compiled graph.
+        settings.TRAVEL_MOCK_APIS,
+        settings.PLACES_PROVIDER,
+        settings.TRANSIT_PROVIDER,
+        settings.FLIGHTS_PROVIDER,
+        settings.HOTELS_PROVIDER,
+        settings.NOMINATIM_BASE_URL,
+        settings.OSRM_BASE_URL,
+        settings.NOMINATIM_USER_AGENT,
+        settings.TRAVEL_PROVIDER_TIMEOUT_S,
         mcp_sig,
     )
 

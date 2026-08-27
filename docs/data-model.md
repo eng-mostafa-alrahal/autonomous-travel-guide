@@ -7,6 +7,8 @@ This project uses **PostgreSQL** through SQLAlchemy 2.x async, plus LangGraph's 
 ```mermaid
 erDiagram
     USERS ||--o{ SESSIONS : "has many"
+    USERS ||--o{ ITINERARIES : "has many"
+    SESSIONS ||--o{ ITINERARIES : "has many"
     USERS {
       uuid id PK "UUIDv7"
       string name "max 120"
@@ -32,6 +34,18 @@ erDiagram
       int doc_count
       text error_message "nullable"
       timestamptz indexed_at "nullable"
+      timestamptz created_at
+      timestamptz updated_at
+    }
+    ITINERARIES {
+      uuid id PK "UUIDv7"
+      uuid session_id FK "→ SESSIONS.id (cascade delete)"
+      uuid user_id FK "→ USERS.id (cascade delete)"
+      text content "rendered markdown plan"
+      jsonb requirements "TripRequirements dump"
+      jsonb clusters "per-day DayCluster dumps"
+      int num_days "nullable"
+      string destination_label "max 255, nullable"
       timestamptz created_at
       timestamptz updated_at
     }
@@ -84,6 +98,25 @@ Tracks which destinations have an indexed knowledge base. Shared by the travel p
 
 The canonical key is built by `build_destination_key()` in `app/modules/agent_orchestration/domain/kb_destination.py`.
 
+### `itineraries` (`app/infrastructure/database/postgres/models/itinerary_model.py`)
+
+A persisted travel plan, written (best-effort) when a travel-planner run finishes (Stage 9). Each completed run appends a new row, so the table doubles as a per-session version history; revision turns are intentionally deferred, but the stored `requirements` + `clusters` are the inputs a revision diff will compare against.
+
+| Column | Type | Constraints |
+|---|---|---|
+| `id` | `UUID` | PK, default `uuid7()` |
+| `session_id` | `UUID` | FK → `sessions.id`, `ON DELETE CASCADE`, indexed |
+| `user_id` | `UUID` | FK → `users.id`, `ON DELETE CASCADE`, indexed |
+| `content` | `TEXT` | not null — rendered day-by-day markdown |
+| `requirements` | `JSONB` | not null, default `{}` — `TripRequirements` dump that produced this plan |
+| `clusters` | `JSONB` | not null, default `[]` — per-day `DayCluster` dumps (stops + travel legs) |
+| `num_days` | `INTEGER` | nullable |
+| `destination_label` | `VARCHAR(255)` | nullable |
+| `created_at` | `TIMESTAMPTZ` | not null |
+| `updated_at` | `TIMESTAMPTZ` | not null, auto-updated |
+
+The write path is `ItineraryService.save_completed()` (`modules/agent_orchestration/application/use_cases/itinerary_service.py`), called from `MainGraphOrchestrator` after a successful, non-interrupted run. Persistence failures are logged and swallowed so a DB hiccup never fails an otherwise-successful turn. Reads: `get_latest_for_session` / `list_for_session` on `IItineraryRepository` — no HTTP endpoint yet (the itinerary already streams back in the chat reply/SSE).
+
 ### ID strategy
 
 All primary keys are **UUIDv7** (see `app/shared/uuid_utils.py`). UUIDv7s are time-sortable, which keeps B-tree indexes compact and list ordering intuitive ("newest first" === `ORDER BY id DESC`).
@@ -95,6 +128,7 @@ All primary keys are **UUIDv7** (see `app/shared/uuid_utils.py`). UUIDv7s are ti
 - `alembic/env.py` wires a sync psycopg URL (via `settings.get_database_sync_url()`) so Alembic doesn't need async drivers.
 - `alembic/versions/31121b69cc8e_initial_schema.py` is the initial migration (creates `users` + `sessions`).
 - `alembic/versions/a1b2c3d4e5f6_add_kb_destinations.py` adds the `kb_destinations` table.
+- `alembic/versions/b7c8d9e0f1a2_add_itineraries.py` adds the `itineraries` table.
 
 Commands:
 
@@ -106,7 +140,7 @@ alembic downgrade -1              # rollback one
 
 ## Unit of Work
 
-Database access uses a `SqlAlchemyUnitOfWork` (in `app/infrastructure/database/postgres/unit_of_work.py`) that exposes repositories (`users`, `sessions`, `kb_destinations`) and commits/rolls-back atomically. Use cases always interact through the UoW — they never construct repositories directly.
+Database access uses a `SqlAlchemyUnitOfWork` (in `app/infrastructure/database/postgres/unit_of_work.py`) that exposes repositories (`users`, `sessions`, `kb_destinations`, `itineraries`) and commits/rolls-back atomically. Use cases always interact through the UoW — they never construct repositories directly.
 
 ```python
 async with uow:
@@ -122,6 +156,7 @@ Domain entities are pure dataclasses/Pydantic under `modules/<feature>/domain/*`
 - `UserORM` ↔ `User`  (`modules/users/domain/user.py`)
 - `SessionORM` ↔ `Session`  (`modules/sessions/domain/session.py`)
 - `KBDestinationORM` ↔ `KBDestination`  (`modules/agent_orchestration/domain/kb_destination.py`)
+- `ItineraryORM` ↔ `Itinerary`  (`modules/agent_orchestration/domain/itinerary.py`)
 
 ## pgvector (optional)
 

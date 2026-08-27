@@ -11,10 +11,10 @@ from langgraph.types import interrupt
 
 from app.infrastructure.llm_gateways.structured_output import with_pydantic_output
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
+from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.prompts.context import PromptContext
 from app.modules.agent_orchestration.domain.prompts.intent import PromptIntent
 from app.modules.agent_orchestration.domain.prompts.schema_compact import compact_schema_for_llm
-from app.modules.agent_orchestration.domain.routing_rules.travel_planner_router import SPECIALISTS
 from app.modules.agent_orchestration.domain.schemas.trip_requirements import TripRequirements
 from app.modules.agent_orchestration.domain.states.travel_planner_state import TravelPlannerState
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.prompt_trace_config import (
@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _SLOT_PHRASES = {
     "destination": "a destination (city or country)",
+    "origin": "where you are traveling from (your current / departure city)",
     "num_days": "how many days the trip is",
     "budget": "your budget",
 }
@@ -78,7 +79,18 @@ def make_collect_requirements_node(llm: BaseChatModel, *, prompt_provider: IProm
             "requirements_complete": complete,
         }
         if complete:
-            updates["pending_specialists"] = list(SPECIALISTS)
+            updates.update(
+                phases.phase_update(
+                    phases.PLANNING, "Trip details captured — bringing in the specialists."
+                )
+            )
+        else:
+            updates.update(
+                phases.phase_update(
+                    phases.REQUIREMENTS,
+                    f"I still need {_humanize_missing(missing)}.",
+                )
+            )
         logger.info("travel_requirements complete=%s missing=%s", complete, missing)
         return updates
 
@@ -89,6 +101,7 @@ def ask_requirements(state: TravelPlannerState) -> dict[str, Any]:
     missing = state.get("missing_slots") or []
     answer = interrupt(
         {
+            "kind": "requirements",
             "message": (
                 f"To plan your trip I still need {_humanize_missing(missing)}. "
                 "Could you share those details?"
@@ -100,4 +113,7 @@ def ask_requirements(state: TravelPlannerState) -> dict[str, Any]:
         text = answer.get("feedback") or answer.get("answer") or answer.get("action") or ""
     else:
         text = str(answer)
-    return {"messages": [HumanMessage(content=str(text or ""))]}
+    return {
+        "messages": [HumanMessage(content=str(text or ""))],
+        **phases.phase_update(phases.REQUIREMENTS, "Thanks — re-checking your trip details."),
+    }

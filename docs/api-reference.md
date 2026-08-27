@@ -189,17 +189,52 @@ Only emits a chunk when the latest AI message has non-empty text (internal memor
 {
   "node": "researcher",
   "messages": [{"type":"ai","content":"...","tool_calls":[...]}],
-  "updates": { "retrieved_context": ["…"] }
+  "updates": { "retrieved_context": ["…"] },
+  "phase": null,
+  "phase_status": null,
+  "namespace": []
 }
 ```
 
 Emits one chunk per meaningful per-node update (skipped when the payload has no new content and no updates).
+
+**`stream_detail=phases`** — progress lines plus the same content chunks as `content` mode. Intended for showing the user what the agent is doing during the long steps (deep research can run for minutes with nothing else to display):
+
+```
+data: {"phase":"requirements","status":"Getting started on your trip plan."}
+
+data: {"phase":"planning","status":"Researching local insights for Kyoto."}
+
+data: {"phase":"knowledge_build","status":"Researching Kyoto in depth — this can take a few minutes."}
+
+data: {"phase":"knowledge_build","status":"Knowledge base ready (34 entries)."}
+
+data: {"phase":"itinerary","status":"Writing your day-by-day itinerary."}
+
+data: {"content":"# Day 1 — Higashiyama …"}
+
+data: [DONE]
+```
+
+- A chunk is either a progress line (`phase` + `status`) or a content line (`content`); distinguish by key.
+- `phase` is one of `requirements`, `planning`, `knowledge_build`, `itinerary`, `done` (see `app/modules/agent_orchestration/domain/phases.py`); `status` is user-facing prose and may change between releases — do not parse it.
+- Repeated identical progress lines are suppressed, so a status only appears when it actually changes.
+- Progress lines come from the travel graphs. The legacy supervisor mode (`TRAVEL_PLANNER_ENABLED=false`) emits none, so `phases` degrades to `content` there.
+
+> **Ordering guarantee:** a node announces the work that comes **next**, because LangGraph only publishes a node's state updates once that node returns. "Researching Kyoto in depth…" is therefore emitted *before* the research call starts, not after.
 
 ## Human Approval
 
 ### `POST /runs/{thread_id}/resume`
 
 `thread_id` == `session_id` of the original run.
+
+The pending `approval_request` carries a `kind` so clients can tell the pause types apart:
+
+| `kind` | Raised by | Expected resume |
+|---|---|---|
+| `requirements` | Travel planner is missing required trip slots (`missing` lists them) | `feedback` with the answer |
+| `kb_build` | Knowledge builder wants approval before deep research (`city`, `country`, `destination_key`) | `action` = `approved` / `rejected` |
 
 Request (`ResumeRequest`):
 
@@ -273,6 +308,6 @@ See `app/modules/agent_orchestration/application/dtos/agent_result.py`:
 
 - `AgentMessage { type, content, id?, tool_calls?, model?, usage? }`
 - `AgentRunResult { messages[], interrupted, thread_id?, approval_request? }` + `last_ai_reply` property
-- `AgentEvent { node, messages[], updates{} }`
+- `AgentEvent { node, messages[], updates{}, phase?, phase_status?, namespace[] }` — `namespace` lists the enclosing subgraph nodes (empty for master-graph events)
 - `AgentStateSnapshot { thread_id, interrupted, next_nodes[], tasks[] }`
 - `ApprovalRequest { reason?, data{} }`

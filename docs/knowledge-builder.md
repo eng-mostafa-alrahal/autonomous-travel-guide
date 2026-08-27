@@ -21,11 +21,11 @@ flowchart TD
 |------|------|----------------|
 | `confirm_build` | HITL (`interrupt()`) | Warn the user deep research may take a while; wait for approve/reject. Marks `kb_destinations.status = building` on approval. |
 | `deep_research` | async I/O | Compose a research brief from `city`/`country`/`topics` and call the Jina DeepSearch client. Stores raw text + sources in state. |
-| `deduplicate` | LLM (structured) | Remove redundant/overlapping content and organize the research into topic-tagged segments (`PreparedKnowledge`). |
+| `deduplicate` | LLM (structured) | Keep each DeepSearch report verbatim and add extra long-form chapters from the model's own knowledge (`PreparedKnowledge`). |
 | `ingest` | async I/O | Send the cleaned segments to the `IngestionService`; store vectors in pgvector. On success marks `status = ready` + `doc_count`; on failure marks `status = failed`. |
 | `notify_complete` | sync | Emit an `AIMessage` telling the user the destination KB is ready. |
 
-The graph is **linear with one branch** (approve/reject) — no loops — so the state uses plain fields (no list reducers beyond the inherited `messages`).
+The graph is **linear with one branch** (approve/reject) — no loops — so the state uses plain fields (no list reducers beyond the inherited `messages`). The one exception: `phase` / `phase_status` carry the `merge_phase` reducer, shared with the planner/root states so parallel specialists can write progress concurrently (see [Travel Planner § progress reporting](./travel-planner.md)).
 
 ## State
 
@@ -41,6 +41,7 @@ The graph is **linear with one branch** (approve/reject) — no loops — so the
 | `research_sources` | `list[str]` | Visited URLs / citations. |
 | `prepared_segments` | `list[dict]` | `[{topic, content}]` after dedup. |
 | `doc_count` | `int` | Number of vectors stored. |
+| `phase` / `phase_status` | `str \| None` | Progress reporting (see below). |
 
 (Plus inherited `messages`, `session_id`, `user_id`, `error`, `human_feedback`.)
 
@@ -55,7 +56,7 @@ Clean-architecture boundaries are preserved: the graph (infrastructure) depends 
 ### Ingestion (`IIngestionService`)
 - Port: `app/modules/agent_orchestration/application/ports/ingestion_port.py` — `ingest(segments, destination) -> IngestionResult`.
 - Adapters in `app/infrastructure/ingestion/`:
-  - `LocalPgVectorIngestionAdapter` (**default**): chunks + embeds segments locally and `add_documents()` into pgvector with metadata `{destination_key, city, country, topic, source}`.
+  - `LocalPgVectorIngestionAdapter` (fallback when no URL is set): chunks + embeds segments locally and `add_documents()` into pgvector with metadata `{destination_key, city, country, topic, source}`.
   - `HttpIngestionAdapter`: integrates the external **RAG Document Processor** (see below). It does **not** re-embed — the service returns vectors, which are upserted into pgvector via `PGVector.add_embeddings`.
   - `factory.build_ingestion_service()` picks the adapter based on `INGESTION_SERVICE_URL`.
 
@@ -64,18 +65,28 @@ Clean-architecture boundaries are preserved: the graph (infrastructure) depends 
 
 ## External ingestion service contract (RAG Document Processor)
 
-Used only when `INGESTION_SERVICE_URL` is set. Auth header `X-API-Key: <INGESTION_SERVICE_API_KEY>`. All routes under `/api/v1`.
+**Status: live** on Cloud Run. Used when `INGESTION_SERVICE_URL` is set; otherwise the local fallback runs. Auth header `X-API-Key: <INGESTION_SERVICE_API_KEY>` (key issued by the service operator). All routes under `/api/v1`; interactive schema at `{BASE_URL}/docs`.
 
-1. `POST /ingest/text` `{ texts, embedding_model, embedding_dimensions, embedding_pipeline: "chunk_then_embed", macro_splitter: "recursive" }` -> `{ job_id }`.
-2. Poll `GET /jobs/{job_id}` every `INGESTION_POLL_INTERVAL_S` until `status` in `{completed, failed}`, bounded by `INGESTION_POLL_TIMEOUT_S`.
+Each knowledge segment becomes its own job, so per-topic metadata survives. Jobs run concurrently up to `INGESTION_MAX_CONCURRENCY`.
+
+1. `POST /ingest/text` `{ texts, embedding_pipeline, macro_splitter, embedder_provider, embedding_model, embedding_dimensions, late_chunk_min_tokens, late_chunk_max_tokens }` -> `{ job_id }`.
+2. Poll `GET /jobs/{job_id}` every `INGESTION_POLL_INTERVAL_S` until `status` in `{completed, failed}`, bounded by `INGESTION_POLL_TIMEOUT_S`. A `failed` status raises with `error_message`.
 3. `GET /jobs/{job_id}/results` -> `{ chunks: [{ index, text, embedding, metadata }] }` (retry on `409 job_results_not_ready`).
-4. Upsert `text + embedding + metadata` into pgvector without re-embedding.
+4. Upsert `text + embedding + metadata` into pgvector via `PGVector.add_embeddings` without re-embedding, adding `{destination_key, city, country, topic, source}`.
 
-**Consistency rule:** the adapter sends `embedding_model = EMBEDDING_MODEL` and `embedding_dimensions = EMBEDDING_DIMENSIONS` so ingested vectors match the city-expert query embeddings. Mismatched models/dims break retrieval.
+**Consistency rule (enforced):** the adapter pins `embedder_provider`, `embedding_model`, `embedding_dimensions`, and `embedding_pipeline` on every submit. Query-time embeddings in `build_pgvector_store()` must use the same model/dimensions (Jina v3 @ 1024 when using `late_chunking`). The adapter raises if a returned vector's width differs from `EMBEDDING_DIMENSIONS`.
+
+Errors come back as `{detail, code}` and are surfaced with the code attached (e.g. `401` invalid key, `422 invalid_embedding_dimensions` including the allowed min/max). Valid dimension ranges per model: `GET /api/v1/embeddings/dimension-constraints` (our `text-embedding-3-small` allows 256–1536; we use 1536).
+
+Smoke-test the integration end to end (no pgvector writes):
+
+```bash
+uv run python scripts/check_ingestion_service.py
+```
 
 ## Prompts
 
-- Intent `KNOWLEDGE_DEDUP` (`knowledge_builder/dedup_v1.md.jinja`) — paired with the shared `STRUCTURED_OUTPUT_SYSTEM` system prompt, emits `PreparedKnowledge`.
+- Intent `KNOWLEDGE_DEDUP` (`knowledge_builder/enrich_v1.md.jinja`) — paired with the shared `STRUCTURED_OUTPUT_SYSTEM` system prompt. The node stores each DeepSearch report as-is, then asks the LLM only for **additional** long-form chapters (not a summary).
 - Registered in `app/core/config/prompt_registry.toml`.
 
 ## Wiring status
@@ -83,9 +94,25 @@ Used only when `INGESTION_SERVICE_URL` is set. Auth header `X-API-Key: <INGESTIO
 Stage 1 built the subgraph and all its dependencies as standalone, testable units. **Stage 3** wires it into the **travel master graph** (`travel_master_builder.py`, state `TravelRootState`) alongside the Travel Planner:
 
 - The Planner's `city_expert` auto-triggers a build on a KB miss; the master routes Planner → `knowledge_builder` → `after_build` → Planner (re-plan). See [Travel Planner § Stage 3](./travel-planner.md#stage-3--kb-miss-auto-trigger-master-graph).
+- A miss is **retrieval empty and** no `kb_destinations` row with `status=ready`. If the row is already ready (e.g. query embedder glitch), the planner falls back to web search instead of asking to rebuild.
+- Query-time embeddings must match ingest: Jina v3 via `EMBEDDING_BASE_URL=https://api.jina.ai/v1` with `check_embedding_ctx_length=False` (see [`configuration.md`](./configuration.md)).
 - `confirm_build`'s `interrupt()` is the approval gate. On **reject**, the builder ends without ingesting (nothing written to the KB) and the Planner falls back to web search.
 - The master is selected by `MainGraphOrchestrator` when `TRAVEL_PLANNER_ENABLED` is true.
+
+## Progress reporting
+
+This graph is where the long silences happen — deep research alone is bounded by `JINA_DEEPSEARCH_TIMEOUT_S` (300 s by default). Every node therefore emits a `phase_status` announcing the step that is **about to** run, streamed to clients as `{"phase":"knowledge_build","status":"…"}` via `stream_detail=phases` ([API reference](./api-reference.md#post-chatstream)):
+
+| Node | Announces |
+|------|-----------|
+| `confirm_build` (approved) | "Researching {destination} in depth — this can take a few minutes." |
+| `confirm_build` (rejected) | Falls back to `planning`: "Skipping the knowledge build — using web search instead." |
+| `deep_research` | "Sorting through the research findings." (or "Deep research failed.") |
+| `deduplicate` | "Storing what I learned in the knowledge base." |
+| `ingest` | "Knowledge base ready (N entries)." (or the storage failure) |
 
 ## Human-in-the-loop
 
 `confirm_build` uses LangGraph `interrupt()`. The run pauses and the API returns `interrupted: true` with an approval request; the client resumes via `POST /api/v1/runs/{thread_id}/resume` with `{ "action": "approve" | "reject" }`. This reuses the existing HITL machinery (`human_review_node` pattern + `Command(resume=...)`).
+
+The interrupt payload is tagged `"kind": "kb_build"` so clients can distinguish it from the planner's `"kind": "requirements"` question and render an approve/reject prompt instead of a text box.
