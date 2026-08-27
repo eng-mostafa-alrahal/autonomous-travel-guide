@@ -21,8 +21,11 @@ from pydantic import BaseModel
 from app.infrastructure.llm_gateways.structured_output import with_pydantic_output
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
 from app.modules.agent_orchestration.application.ports.travel_providers_port import (
+    IFlightsProvider,
+    IHotelsProvider,
     IPlacesProvider,
 )
+from app.modules.agent_orchestration.application.use_cases.kb_status_service import KBStatusService
 from app.modules.agent_orchestration.domain import phases
 from app.modules.agent_orchestration.domain.kb_destination import build_destination_key
 from app.modules.agent_orchestration.domain.prompts.context import PromptContext
@@ -50,7 +53,10 @@ _EVIDENCE_CAP = 6000
 # Each parallel specialist's web-search query template, keyed by role.
 ROLE_QUERIES: dict[str, str] = {
     "hotels": "best places to stay and accommodation areas in {dest} for a {budget} budget",
-    "flights_logistics": "how to get to {dest} and get around locally (transport options, passes)",
+    "flights_logistics": (
+        "flights and travel options from {origin} to {dest}, "
+        "plus local transport, airport transfers, and passes in {dest}"
+    ),
     "food": "best restaurants, street food, and local cuisine to try in {dest}",
 }
 
@@ -109,6 +115,8 @@ def make_specialist_node(
     prompt_provider: IPromptProvider,
     web_search_tool: BaseTool | None,
     places_provider: IPlacesProvider | None = None,
+    hotels_provider: IHotelsProvider | None = None,
+    flights_provider: IFlightsProvider | None = None,
 ):
     schema = ROLE_SCHEMAS[role]
 
@@ -116,18 +124,40 @@ def make_specialist_node(
         requirements = state.get("requirements", {})
         dest = destination_label(requirements)
         budget = str(requirements.get("budget") or "any")
+        origin = str(
+            requirements.get("origin_city")
+            or requirements.get("origin")
+            or requirements.get("departure_city")
+            or ""
+        ).strip()
         template = ROLE_QUERIES.get(role, "{role} recommendations for a trip to {dest}")
-        query = template.format(dest=dest, budget=budget, role=role)
+        query = template.format(
+            dest=dest,
+            budget=budget,
+            role=role,
+            origin=origin or "the traveller's home city",
+        )
 
-        # Stage 10: for the food specialist, try real POI data (with coords) first;
-        # fall back to web-search evidence + LLM when the provider yields nothing.
-        provider_pois: list[dict[str, Any]] | None = None
-        if role == "food" and places_provider is not None:
-            found = await places_provider.search_pois(query)
-            if found:
-                provider_pois = [p.model_dump() for p in found]
+        # Stage 10: try a real/mock provider first. A hit becomes the structured
+        # output directly (offline mocks / live APIs). None → web-search + LLM.
+        # Knowledge-builder path is untouched (city_expert owns KB misses).
+        provider_items = await _provider_items_for_role(
+            role,
+            dest=dest,
+            budget=budget,
+            origin=origin,
+            query=query,
+            places_provider=places_provider,
+            hotels_provider=hotels_provider,
+            flights_provider=flights_provider,
+        )
+        if provider_items is not None:
+            return {
+                "specialist_outputs": {role: provider_items},
+                **phases.phase_update(phases.PLANNING, phases.specialist_status(role, dest)),
+            }
 
-        evidence = "" if provider_pois is not None else await run_web_search(web_search_tool, query)
+        evidence = await run_web_search(web_search_tool, query)
         items = await _structured_items(
             llm,
             prompt_provider,
@@ -141,10 +171,6 @@ def make_specialist_node(
             ),
             "Provide your recommendations.",
         )
-        if provider_pois is not None:
-            # Real coordinates win; keep any LLM notes for colour.
-            geo = {p["name"].strip().lower(): (p["lat"], p["lng"]) for p in provider_pois}
-            _merge_coords(items, geo)
         return {
             "specialist_outputs": {role: items},
             # With no delegate turn between parallel specialists, each announces
@@ -155,6 +181,31 @@ def make_specialist_node(
     return specialist
 
 
+async def _provider_items_for_role(
+    role: str,
+    *,
+    dest: str,
+    budget: str,
+    origin: str,
+    query: str,
+    places_provider: IPlacesProvider | None,
+    hotels_provider: IHotelsProvider | None,
+    flights_provider: IFlightsProvider | None,
+) -> list[dict[str, Any]] | None:
+    if role == "hotels" and hotels_provider is not None:
+        found = await hotels_provider.search(destination=dest, budget=budget)
+        return [h.model_dump() for h in found] if found else None
+    if role == "flights_logistics" and flights_provider is not None:
+        if not origin:
+            return None
+        found = await flights_provider.search(origin=origin, destination=dest)
+        return [f.model_dump() for f in found] if found else None
+    if role == "food" and places_provider is not None:
+        found = await places_provider.search_pois(query)
+        return [p.model_dump() for p in found] if found else None
+    return None
+
+
 def make_city_expert_node(
     llm: BaseChatModel,
     *,
@@ -162,16 +213,40 @@ def make_city_expert_node(
     retriever_provider: RetrieverProvider | None,
     web_search_tool: BaseTool | None,
     places_provider: IPlacesProvider | None = None,
+    kb_status_service: KBStatusService | None = None,
 ):
     async def city_expert(state: TravelPlannerState) -> dict[str, Any]:
         requirements = state.get("requirements", {})
         dest = destination_label(requirements)
-        destination_key = build_destination_key(
-            city=requirements.get("destination_city"),
-            country=requirements.get("destination_country"),
-        )
+        city = requirements.get("destination_city")
+        country = requirements.get("destination_country")
+        destination_key = build_destination_key(city=city, country=country)
+
+        kb_row = None
+        if kb_status_service is not None and destination_key:
+            try:
+                kb_row = await kb_status_service.get_status(destination_key)
+                # LLM sometimes omits/adds country across turns ("lisbon|portugal"
+                # vs "lisbon|"). Prefer a ready city-only row over a false miss.
+                if kb_row is None and city:
+                    alt_key = build_destination_key(city=city, country=None)
+                    if alt_key != destination_key:
+                        alt_row = await kb_status_service.get_status(alt_key)
+                        if alt_row and alt_row.status == "ready" and (alt_row.doc_count or 0) > 0:
+                            logger.info(
+                                "city_expert using ready KB key %s instead of %s",
+                                alt_key,
+                                destination_key,
+                            )
+                            kb_row = alt_row
+                            destination_key = alt_key
+            except Exception:
+                logger.exception("city_expert kb status lookup failed for %s", destination_key)
+
+        kb_ready = bool(kb_row and kb_row.status == "ready" and (kb_row.doc_count or 0) > 0)
 
         evidence = ""
+        retrieval_error = False
         retriever = retriever_provider(destination_key) if retriever_provider else None
         if retriever is not None:
             try:
@@ -179,14 +254,23 @@ def make_city_expert_node(
                     retriever.invoke, f"travel guide overview of {dest}"
                 )
                 evidence = "\n\n".join(getattr(d, "page_content", "") for d in docs)
+                logger.info(
+                    "city_expert retrieval destination=%s hits=%d evidence_chars=%d",
+                    destination_key,
+                    len(docs or []),
+                    len(evidence),
+                )
             except Exception:
-                logger.exception("city_expert retrieval failed")
+                retrieval_error = True
+                logger.exception("city_expert retrieval failed destination=%s", destination_key)
                 evidence = ""
 
-        # KB miss: if the knowledge base is operational but has nothing for this
-        # destination (and we haven't tried yet), hand off to the knowledge builder.
+        # KB miss: only when retrieval is empty AND we have no ready row yet.
+        # A ready row with empty/failed retrieval (embedder glitch) must not force
+        # another deep-research build — fall through to web search instead.
         if (
             not evidence.strip()
+            and not kb_ready
             and retriever is not None
             and not state.get("kb_build_attempted")
         ):
@@ -194,8 +278,8 @@ def make_city_expert_node(
             return {
                 "kb_miss": True,
                 "destination_key": destination_key,
-                "city": requirements.get("destination_city"),
-                "country": requirements.get("destination_country"),
+                "city": city,
+                "country": country,
                 "messages": [
                     AIMessage(
                         content=(
@@ -212,6 +296,13 @@ def make_city_expert_node(
             }
 
         if not evidence.strip():
+            if kb_ready:
+                logger.warning(
+                    "city_expert KB ready for %s but retrieval empty "
+                    "(error=%s) — using web search instead of rebuilding",
+                    destination_key,
+                    retrieval_error,
+                )
             evidence = await run_web_search(
                 web_search_tool, f"travel guide culture history attractions {dest}"
             )

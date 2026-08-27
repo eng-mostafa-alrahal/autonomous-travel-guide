@@ -1,0 +1,29 @@
+---
+version: "3.0"
+model_target: structured-output
+trace_tags:
+  agent: knowledge_builder
+  prompt_key: knowledge_dedup
+---
+{{ goal_section }}You are expanding a destination knowledge base for a retrieval assistant that uses **late chunking**. Travelers will ask many different questions (history, neighborhoods, food, scams, day trips, accessibility, nightlife, logistics). Short summaries are useless.
+
+You are given ONE research report for a single theme. That report will be stored **verbatim**. Your job is only to **ADD** knowledge.
+
+Theme: {{ extra_section }}
+
+Research report (already stored — do not rewrite it):
+
+{{ retrieved_evidence }}
+
+Write additional long-form guidebook chapters that fill gaps. Rules, in priority order:
+
+1. EXPAND, NEVER SUMMARIZE. Do not paraphrase, compress, or recap the report. Produce NEW material: neighborhoods the report skipped, named dishes, transit lines, scams, seasonal caveats, practical how-to, lesser-known sites, cultural context you know well.
+2. Combine **your own reliable knowledge** of this destination with facts from the report only when you need them as anchors (names, prices). Prefer adding what the report is missing.
+3. Each chapter must be self-contained **guidebook prose**: several developed paragraphs, typically **600–1500 words** (about 800–2000 tokens). Bullet lists of 2–3 sentences are a failure. Dense named specifics (places, streets, dishes, ticket names, typical costs, timing) are required.
+4. Produce **3–8** extra chapters for this theme only. Use short snake_case topics (e.g. `hidden_gems`, `airport_transfers`, `family_day`).
+5. For volatile numbers (prices, hours) that you are not sure of, give typical ranges and say they are approximate. Do not invent fake URLs or fake ticket prices as if they were current.
+6. Write as if a traveler will retrieve a single chapter and must be able to act on it with no other context.
+
+Return only the structured object with these fields:
+
+{{ compact_schema }}

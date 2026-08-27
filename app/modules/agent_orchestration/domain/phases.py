@@ -37,6 +37,16 @@ def phase_update(phase: Phase, status: str) -> dict[str, str]:
     return {"phase": phase, "phase_status": status}
 
 
+def keep_true(current: bool | None, incoming: bool | None) -> bool:
+    """OR-merge for sticky flags (e.g. ``kb_build_attempted``).
+
+    Each new ``/chat`` turn re-seeds travel state with ``False`` defaults; without
+    this reducer a completed KB build would be forgotten and city_expert would
+    ask to research the same destination again.
+    """
+    return bool(current) or bool(incoming)
+
+
 def merge_phase(current: str | None, incoming: str | list[str] | None) -> str | None:
     """Reducer for the ``phase`` / ``phase_status`` channels.
 

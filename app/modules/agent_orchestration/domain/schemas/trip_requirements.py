@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-REQUIRED_SLOTS: tuple[str, ...] = ("destination", "num_days", "budget")
+REQUIRED_SLOTS: tuple[str, ...] = ("destination", "origin", "num_days", "budget")
 
 
 class TripRequirements(BaseModel):
@@ -16,6 +16,10 @@ class TripRequirements(BaseModel):
 
     destination_city: str | None = Field(default=None, description="Target city, if given.")
     destination_country: str | None = Field(default=None, description="Target country, if given.")
+    origin_city: str | None = Field(
+        default=None,
+        description="Traveller's current / departure city (where they are flying or leaving from).",
+    )
     num_days: int | None = Field(default=None, description="Trip length in days.")
     budget: str | None = Field(
         default=None, description="Budget as free text, e.g. '$1500' or 'mid-range'."
@@ -37,12 +41,20 @@ class TripRequirements(BaseModel):
             d["interests"] = []
         elif isinstance(interests, str):
             d["interests"] = [interests]
+        # Accept common aliases from free-text extraction.
+        if not d.get("origin_city"):
+            for alt in ("origin", "departure_city", "from_city", "home_city"):
+                if d.get(alt):
+                    d["origin_city"] = d[alt]
+                    break
         return d
 
     def missing_required(self) -> list[str]:
         missing: list[str] = []
         if not (self.destination_city or self.destination_country):
             missing.append("destination")
+        if not self.origin_city:
+            missing.append("origin")
         if not self.num_days:
             missing.append("num_days")
         if not self.budget:

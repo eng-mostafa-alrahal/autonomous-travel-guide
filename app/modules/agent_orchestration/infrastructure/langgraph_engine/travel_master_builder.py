@@ -21,6 +21,8 @@ from app.modules.agent_orchestration.application.ports.deep_research_port import
 from app.modules.agent_orchestration.application.ports.ingestion_port import IIngestionService
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
 from app.modules.agent_orchestration.application.ports.travel_providers_port import (
+    IFlightsProvider,
+    IHotelsProvider,
     IPlacesProvider,
     ITransitProvider,
 )
@@ -60,16 +62,23 @@ def build_travel_master_graph(
     logistician_llm: BaseChatModel | None = None,
     transit_provider: ITransitProvider | None = None,
     places_provider: IPlacesProvider | None = None,
+    hotels_provider: IHotelsProvider | None = None,
+    flights_provider: IFlightsProvider | None = None,
+    kb_research_calls: int = 1,
+    kb_research_max_concurrency: int = 3,
 ) -> StateGraph:
     planner_subgraph = build_travel_planner_graph(
         llm,
         prompt_provider=prompt_provider,
         web_search_tool=web_search_tool,
         retriever_provider=retriever_provider,
+        kb_status_service=kb_status_service,
         requirements_llm=requirements_llm,
         logistician_llm=logistician_llm,
         transit_provider=transit_provider,
         places_provider=places_provider,
+        hotels_provider=hotels_provider,
+        flights_provider=flights_provider,
     ).compile()
 
     knowledge_builder_subgraph = build_knowledge_builder_graph(
@@ -78,6 +87,8 @@ def build_travel_master_graph(
         deep_research_client=deep_research_client,
         ingestion_service=ingestion_service,
         kb_status_service=kb_status_service,
+        research_calls=kb_research_calls,
+        research_max_concurrency=kb_research_max_concurrency,
     ).compile()
 
     def travel_root(_state: TravelRootState) -> dict[str, Any]:

@@ -11,11 +11,11 @@ Production-oriented FastAPI + LangGraph backend that **plans personalised trips*
 ### Travel guide (primary — `TRAVEL_PLANNER_ENABLED=true`)
 
 - **Travel Planner** graph — collects trip requirements (HITL), runs specialists (city expert with RAG first, then hotels / flights-logistics / food **in parallel** via LangGraph `Send`), clusters POIs into coherent days, synthesises a day-by-day itinerary
-- **Knowledge Builder** graph — on KB miss, asks user approval → Jina deep research → LLM dedup → pgvector ingest; on reject, web-search fallback with nothing stored
+- **Knowledge Builder** graph — on KB miss, asks user approval → Jina deep research → keep reports + LLM extra chapters → pgvector ingest (late chunking); on reject, web-search fallback with nothing stored
 - **Destination-scoped RAG** via pgvector (`build_destination_retriever`) with Tavily web-search fallback
 - **`kb_destinations`** table tracking per-city indexing status (`building` / `ready` / `failed`)
 - **Itinerary persistence** — finished plans stored in the `itineraries` table (markdown + requirements + day clusters) as per-session version history
-- **Real travel data providers** (opt-in) — free OSM adapters for POI geocoding (`PLACES_PROVIDER=osm`, Nominatim) and routed leg times (`TRANSIT_PROVIDER=osrm`); per-provider flags with graceful web-search fallback, flights/hotels seam ready for keyed providers
+- **Real travel data providers** (opt-in) — free OSM adapters for POI geocoding (`PLACES_PROVIDER=osm`) and routed legs (`TRANSIT_PROVIDER=osrm`); **`TRAVEL_MOCK_APIS=true`** serves curated hotels/flights/places/transit for London, Paris, Rome, Berlin, New York, Damascus, Los Angeles (KB builds still run)
 
 ### Platform (shared infrastructure)
 

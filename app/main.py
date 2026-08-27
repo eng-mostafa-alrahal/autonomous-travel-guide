@@ -115,7 +115,7 @@ def create_app() -> FastAPI:
             "API for authentication, session management, and LangGraph-powered chat.\n\n"
             "Quick test flow:\n"
             "1) Register or login.\n"
-            "2) Use the returned `access_token` in the `Authorize` button as `Bearer <token>`.\n"
+            "2) Click **Authorize**, paste only the `access_token` (Swagger adds `Bearer`).\n"
             "3) Create a session.\n"
             "4) Call chat endpoints with that `session_id`."
         ),

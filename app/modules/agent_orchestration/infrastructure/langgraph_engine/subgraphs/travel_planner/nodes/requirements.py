@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _SLOT_PHRASES = {
     "destination": "a destination (city or country)",
+    "origin": "where you are traveling from (your current / departure city)",
     "num_days": "how many days the trip is",
     "budget": "your budget",
 }

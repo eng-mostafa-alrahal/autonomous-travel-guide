@@ -102,18 +102,18 @@ The canonical key is built by `build_destination_key()` in `app/modules/agent_or
 
 A persisted travel plan, written (best-effort) when a travel-planner run finishes (Stage 9). Each completed run appends a new row, so the table doubles as a per-session version history; revision turns are intentionally deferred, but the stored `requirements` + `clusters` are the inputs a revision diff will compare against.
 
-|| Column | Type | Constraints |
+| Column | Type | Constraints |
 |---|---|---|
-|| `id` | `UUID` | PK, default `uuid7()` |
-|| `session_id` | `UUID` | FK → `sessions.id`, `ON DELETE CASCADE`, indexed |
-|| `user_id` | `UUID` | FK → `users.id`, `ON DELETE CASCADE`, indexed |
-|| `content` | `TEXT` | not null — rendered day-by-day markdown |
-|| `requirements` | `JSONB` | not null, default `{}` — `TripRequirements` dump that produced this plan |
-|| `clusters` | `JSONB` | not null, default `[]` — per-day `DayCluster` dumps (stops + travel legs) |
-|| `num_days` | `INTEGER` | nullable |
-|| `destination_label` | `VARCHAR(255)` | nullable |
-|| `created_at` | `TIMESTAMPTZ` | not null |
-|| `updated_at` | `TIMESTAMPTZ` | not null, auto-updated |
+| `id` | `UUID` | PK, default `uuid7()` |
+| `session_id` | `UUID` | FK → `sessions.id`, `ON DELETE CASCADE`, indexed |
+| `user_id` | `UUID` | FK → `users.id`, `ON DELETE CASCADE`, indexed |
+| `content` | `TEXT` | not null — rendered day-by-day markdown |
+| `requirements` | `JSONB` | not null, default `{}` — `TripRequirements` dump that produced this plan |
+| `clusters` | `JSONB` | not null, default `[]` — per-day `DayCluster` dumps (stops + travel legs) |
+| `num_days` | `INTEGER` | nullable |
+| `destination_label` | `VARCHAR(255)` | nullable |
+| `created_at` | `TIMESTAMPTZ` | not null |
+| `updated_at` | `TIMESTAMPTZ` | not null, auto-updated |
 
 The write path is `ItineraryService.save_completed()` (`modules/agent_orchestration/application/use_cases/itinerary_service.py`), called from `MainGraphOrchestrator` after a successful, non-interrupted run. Persistence failures are logged and swallowed so a DB hiccup never fails an otherwise-successful turn. Reads: `get_latest_for_session` / `list_for_session` on `IItineraryRepository` — no HTTP endpoint yet (the itinerary already streams back in the chat reply/SSE).
 

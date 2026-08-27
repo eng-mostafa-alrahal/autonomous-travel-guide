@@ -1,5 +1,5 @@
 ---
-version: "2.0"
+version: "2.1"
 model_target: structured-output
 trace_tags:
   agent: travel_planner
@@ -21,3 +21,4 @@ Guidance:
 - Give a small number of concrete, well-known options (quality over quantity). Respect the stated budget and trip length.
 - For each option include a best-estimate latitude/longitude from your knowledge when you reasonably can; use null rather than guessing wildly. Approximate coordinates are fine.
 - Keep `notes` / `details` short and practical. If evidence is missing, rely on well-established general knowledge and use the notes to flag anything that must be verified before booking.
+- If your role is flights_logistics, route recommendations MUST start from the traveller's origin city in the requirements (not a generic "from anywhere"). Include inbound travel plus local transport once they arrive.

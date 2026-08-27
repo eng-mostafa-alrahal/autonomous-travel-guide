@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from app.modules.agent_orchestration.domain.phases import merge_phase
+from app.modules.agent_orchestration.domain.phases import keep_true, merge_phase
 from app.modules.agent_orchestration.domain.states.base_state import BaseAgentState
 from app.modules.agent_orchestration.domain.states.travel_planner_state import (
     merge_specialist_outputs,
@@ -36,7 +36,7 @@ class TravelRootState(BaseAgentState):
     doc_count: int
     # ── cross-graph control ─────────────────────────────────────
     kb_miss: bool
-    kb_build_attempted: bool
+    kb_build_attempted: Annotated[bool, keep_true]
     # ── progress reporting ──────────────────────────────────────
     phase: Annotated[str | None, merge_phase]
     phase_status: Annotated[str | None, merge_phase]

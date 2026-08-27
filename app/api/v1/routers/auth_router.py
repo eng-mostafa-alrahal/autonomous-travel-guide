@@ -36,7 +36,7 @@ async def register(
     summary="Login and get tokens",
     description=(
         "Authenticate with email and password. "
-        "Use the returned `access_token` as `Bearer <token>` in Swagger Authorize."
+        "Use the returned `access_token` in Swagger Authorize (paste the token only)."
     ),
 )
 async def login(

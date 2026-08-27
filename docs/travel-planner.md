@@ -22,7 +22,7 @@ flowchart TD
 ```
 
 The **supervisor** is split into two responsibilities that the plan merged into one role:
-1. **Requirements gathering** — `collect_requirements` extracts trip slots from the conversation via structured output; if required slots are missing, `ask_requirements` pauses with `interrupt()` to ask the user, then loops back.
+1. **Requirements gathering** — `collect_requirements` extracts trip slots from the conversation via structured output (required: destination, **origin / departure city**, days, budget); if required slots are missing, `ask_requirements` pauses with `interrupt()` to ask the user, then loops back.
 2. **Specialist fan-out** — once requirements are complete, `city_expert` runs first (it's the only specialist that can trigger the Knowledge Builder on a KB miss). Provided there's no miss, `fan_out_specialists` then dispatches `hotels`, `flights_logistics`, and `food` **concurrently** via LangGraph `Send`. Their outputs merge under the `specialist_outputs` reducer, and once all three settle the flow continues to `spatial_cluster` → `synthesize_itinerary`.
 
 > Design note: dispatch is deterministic fan-out, not per-step LLM routing. A planner needs *all* sections (lodging, travel, food, local knowledge), so running the three independent specialists in parallel is faster than a sequential queue while staying just as predictable. `city_expert` stays sequential and first because its KB-miss hand-off must complete (or be declined) before the others are worth running.
@@ -32,6 +32,7 @@ The **supervisor** is split into two responsibilities that the plan merged into 
 | Slot | Required | Notes |
 |------|----------|-------|
 | destination (city and/or country) | Yes | At least one of city/country. |
+| `origin` (`origin_city`) | Yes | Traveller's current / departure city — used by `flights_logistics`. Aliases (`origin`, `from_city`, …) coerce into `origin_city`. |
 | `num_days` | Yes | Trip length. |
 | `budget` | Yes | Free text (e.g. "$1500", "mid-range"). |
 | `start_date` | No | — |
@@ -81,7 +82,7 @@ Because progress originates *inside* the planner subgraph, the orchestrator stre
 ## Specialists
 
 - **city_expert** — builds a destination-scoped pgvector retriever (`build_destination_retriever(destination_key)`), queries the KB, and falls back to `web_search` when the KB returns nothing. Runs **first and alone** as the KB-miss gate. (KB-miss auto-trigger of the Knowledge Builder is wired in **Stage 3**.)
-- **hotels** / **flights_logistics** / **food** — search-then-structure specialists driven by a shared parameterized prompt. They run **concurrently** (Stage 8): after the city expert clears the KB gate, `fan_out_specialists` dispatches each via `Send`, and they share a node factory parameterized by `role`. `flights_logistics` also covers local transport / day-routing and uses `LOGISTICIAN_MODEL` when set.
+- **hotels** / **flights_logistics** / **food** — search-then-structure specialists driven by a shared parameterized prompt. They run **concurrently** (Stage 8): after the city expert clears the KB gate, `fan_out_specialists` dispatches each via `Send`, and they share a node factory parameterized by `role`. `flights_logistics` uses the required `origin_city` slot to search routes **from the traveller's departure city** to the destination, plus local transport / day-routing notes; it uses `LOGISTICIAN_MODEL` when set.
 
 All specialists produce **structured output** (Stage 6): a validated Pydantic list rather than prose, stored in `specialist_outputs[role]` as `model_dump()["items"]`. Schemas live in `app/modules/agent_orchestration/domain/schemas/travel_plan.py`:
 
@@ -118,12 +119,12 @@ When a run finishes (non-interrupted), the orchestrator persists the plan to the
 
 ## Real data providers (Stage 10)
 
-Specialists can source data from a **real provider** or fall back to web search. Each is gated by a per-provider flag (`PLACES_PROVIDER`, `TRANSIT_PROVIDER`, `FLIGHTS_PROVIDER`, `HOTELS_PROVIDER`); `"none"` — or any error / empty result — keeps the web-search / heuristic path, so **CI and offline runs are unchanged by default**.
+Specialists can source data from a **real provider**, the **offline mock pack**, or fall back to web search. Per-provider flags (`PLACES_PROVIDER`, `TRANSIT_PROVIDER`, `FLIGHTS_PROVIDER`, `HOTELS_PROVIDER`) select live adapters; `"none"` — or any error / empty result — keeps the web-search / heuristic path. Set **`TRAVEL_MOCK_APIS=true`** to force curated fixtures for all four providers at once.
 
-- **Contracts** (`application/ports/travel_providers_port.py`): `IPlacesProvider` (geocode + POI search), `ITransitProvider` (leg distance/time), `IFlightsProvider`, `IHotelsProvider`. They reuse the specialist schemas (`POI`, `HotelOption`, `FlightOption`) and return `None` to signal "fall back".
-- **Adapters** (`infrastructure/travel/`): `NominatimPlacesProvider` (free OpenStreetMap geocoding/POI search, sends an identifying `User-Agent`) and `OSRMTransitProvider` (free routing for real leg distance/time). `factory.py` builds the configured provider or returns `None`.
-- **Wiring**: `city_expert` and `food` enrich their POIs with real coordinates from the places provider (the LLM still supplies names/notes); `spatial_cluster` uses routed leg distance/time from the transit provider, falling back to the haversine heuristic per-leg. Clustering assignment/ordering stay heuristic (deterministic); only the displayed leg times become real.
-- **Flights/hotels**: no live adapter yet (they need registered provider keys) — the ports + flags + fallback are in place; add one by implementing the port, adding a `Literal` flag value, and branching in `factory.py`.
+- **Contracts** (`application/ports/travel_providers_port.py`): `IPlacesProvider`, `ITransitProvider`, `IFlightsProvider`, `IHotelsProvider`. They reuse the specialist schemas and return `None` to signal "fall back".
+- **Live adapters** (`infrastructure/travel/`): `NominatimPlacesProvider` + `OSRMTransitProvider`. Flights/hotels still need registered provider keys for live calls.
+- **Mock pack** (`mock_data.py` / `mock_providers.py`): offline hotels, flights/logistics, POIs (attractions + food), and transit legs for **London, Paris, Rome, Berlin, New York, Damascus, Los Angeles**. Unknown cities return `None` (web-search fallback). **Does not replace the knowledge builder** — `city_expert` still detects KB misses and can trigger deep research.
+- **Wiring**: hotels / flights / food specialists use a provider hit as their structured output (skipping LLM); `city_expert` still reads the KB first and only uses places for coordinate enrichment; `spatial_cluster` uses routed (or mock) leg times.
 
 ## Prompts
 

@@ -45,7 +45,7 @@ Two LangGraph subgraphs wired into one **travel master graph**:
 
 | Graph | Role |
 |---|---|
-| **Travel Planner** | Collects trip requirements (city, days, budget — HITL slot-filling), runs specialists (`city_expert` first, then `hotels` / `flights_logistics` / `food` **in parallel**), clusters POIs into days, synthesises a day-by-day itinerary. |
+| **Travel Planner** | Collects trip requirements (origin, destination, days, budget — HITL slot-filling), runs specialists (`city_expert` first, then `hotels` / `flights_logistics` / `food` **in parallel**), clusters POIs into days, synthesises a day-by-day itinerary. |
 | **Knowledge Builder** | When the KB has no data for a destination: asks the user to approve a deep search → Jina DeepSearch → LLM dedup → ingest into pgvector → notify. On reject, the planner falls back to web search and **does not** store anything in the KB. |
 
 The **city expert** answers destination questions from destination-scoped RAG (`build_destination_retriever`) with a Tavily web-search fallback when evidence is thin.
@@ -116,6 +116,8 @@ git clone <repo-url> autonomous-travel-guide
 cd autonomous-travel-guide
 
 # 2) Start infra (Postgres with pgvector + Redis)
+# Skip this if you already have shared-infra containers on :5432 / :6379 —
+# point DATABASE_* / REDIS_* in `.env` at them instead (see docs/configuration.md).
 docker-compose up -d postgres redis
 
 # 3) Create + activate virtualenv
@@ -194,7 +196,7 @@ curl -X POST http://localhost:8000/api/v1/chat/ \
 
 | Response shape | Meaning |
 |---|---|
-| `"interrupted": true` + `missing` slots | Planner needs more details (destination, days, budget). Resume with `POST /runs/{thread_id}/resume` and your answer in `feedback`. |
+| `"interrupted": true` + `missing` slots | Planner needs more details (origin, destination, days, budget). Resume with `POST /runs/{thread_id}/resume` and your answer in `feedback`. |
 | `"interrupted": true` + KB approval message | City expert found no KB for the destination. Resume with `{"action": "approve"}` to start deep research, or `{"action": "reject"}` to use web search only (nothing stored). |
 | `"interrupted": false` + `reply` | Itinerary (or partial progress) returned. |
 
@@ -597,7 +599,7 @@ Both scripts:
 
 - Verify `uv` is on `PATH`.
 - Run `uv sync --frozen --extra dev` (or unfrozen if no lock).
-- Start `uvicorn app.main:app --reload`.
+- Start `uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory` (or `python scripts/run_api.py`).
 
 > Don't use `--reload` while heavily exercising stdio MCP servers — `uvicorn` can strand subprocess trees on some platforms. The lifespan logs a warning when it detects this combo.
 
@@ -698,7 +700,13 @@ That's almost always a Pydantic schema in `app/api/v1/schemas/` that drifted fro
 
 ### Windows + Postgres async
 
-`app/main.py` switches asyncio to `WindowsSelectorEventLoopPolicy` on Windows because `psycopg` async (used by LangGraph's checkpointer) requires it. Don't remove that line.
+Uvicorn 0.44 picks `ProactorEventLoop` on Windows when `--reload` is off, but `psycopg` async (LangGraph's Postgres checkpointer) needs a selector loop. Use the custom loop factory:
+
+```bash
+uvicorn app.main:app --loop app.core.event_loop:selector_loop_factory
+```
+
+Or run `python scripts/run_api.py`. `app/main.py` also sets `WindowsSelectorEventLoopPolicy` at import time as a backstop — keep both.
 
 ### "I changed `.env` and tests still fail"
 

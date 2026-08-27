@@ -16,6 +16,7 @@ def format_requirements(requirements: dict[str, Any]) -> str:
     if not requirements:
         return "(none provided yet)"
     labels = [
+        ("origin_city", "From"),
         ("destination_city", "City"),
         ("destination_country", "Country"),
         ("num_days", "Days"),

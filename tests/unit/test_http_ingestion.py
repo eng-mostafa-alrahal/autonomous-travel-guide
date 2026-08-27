@@ -134,6 +134,34 @@ async def test_submit_pins_embedder_contract(monkeypatch: pytest.MonkeyPatch) ->
     assert submit.headers["X-API-Key"] == "rag_test"
 
 
+async def test_submit_pins_late_chunking_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    sink: dict[str, Any] = {}
+    captured: list[httpx.Request] = []
+    _install_transport(monkeypatch, _happy_handler([0.5] * DIMS), captured)
+    _stub_store(monkeypatch, sink)
+
+    await _adapter(
+        embedder_provider="jina",
+        embedding_pipeline="late_chunking",
+        embedding_model="jina-embeddings-v3",
+        macro_splitter="semantic",
+        late_chunk_min_tokens=800,
+        late_chunk_max_tokens=2000,
+    ).ingest(
+        [IngestionSegment(topic="food", content="Great bistros.")], destination=DESTINATION
+    )
+
+    import json
+
+    submit = next(r for r in captured if r.url.path.endswith("/ingest/text"))
+    body = json.loads(submit.content)
+    assert body["embedding_pipeline"] == "late_chunking"
+    assert body["embedder_provider"] == "jina"
+    assert body["macro_splitter"] == "semantic"
+    assert body["late_chunk_min_tokens"] == 800
+    assert body["late_chunk_max_tokens"] == 2000
+
+
 async def test_mismatched_vector_width_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     sink: dict[str, Any] = {}
     _install_transport(monkeypatch, _happy_handler([0.5] * (DIMS - 1)))

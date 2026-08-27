@@ -24,7 +24,12 @@ from app.core.observability.request_context import get_request_id
 from app.infrastructure.database.postgres.unit_of_work import SqlAlchemyUnitOfWork
 from app.infrastructure.ingestion.factory import build_ingestion_service
 from app.infrastructure.research.jina_deepsearch_client import JinaDeepSearchClient
-from app.infrastructure.travel.factory import build_places_provider, build_transit_provider
+from app.infrastructure.travel.factory import (
+    build_flights_provider,
+    build_hotels_provider,
+    build_places_provider,
+    build_transit_provider,
+)
 from app.modules.agent_orchestration.application.dtos.agent_result import (
     AgentEvent,
     AgentRunResult,
@@ -171,7 +176,8 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         )
 
         def retriever_provider(destination_key: str) -> Any:
-            if not (settings.PGVECTOR_ENABLED and settings.OPENAI_API_KEY and destination_key):
+            embedding_key = settings.EMBEDDING_API_KEY or settings.OPENAI_API_KEY
+            if not (settings.PGVECTOR_ENABLED and embedding_key and destination_key):
                 return None
             try:
                 from app.infrastructure.database.postgres.vector_store import (
@@ -191,9 +197,12 @@ class MainGraphOrchestrator(IAgentOrchestrator):
         )
         ingestion_service = build_ingestion_service(settings)
         kb_status_service = KBStatusService(uow_factory=SqlAlchemyUnitOfWork)
-        # Stage 10: real providers (None ⇒ web-search / heuristic fallback).
+        # Stage 10: real/mock providers (None ⇒ web-search / heuristic fallback).
+        # TRAVEL_MOCK_APIS forces the offline fixture pack for all four.
         transit_provider = build_transit_provider(settings)
         places_provider = build_places_provider(settings)
+        hotels_provider = build_hotels_provider(settings)
+        flights_provider = build_flights_provider(settings)
 
         master = build_travel_master_graph(
             llm=llm,
@@ -207,6 +216,10 @@ class MainGraphOrchestrator(IAgentOrchestrator):
             logistician_llm=_opt_model(settings.LOGISTICIAN_MODEL),
             transit_provider=transit_provider,
             places_provider=places_provider,
+            hotels_provider=hotels_provider,
+            flights_provider=flights_provider,
+            kb_research_calls=settings.KB_RESEARCH_CALLS,
+            kb_research_max_concurrency=settings.KB_RESEARCH_MAX_CONCURRENCY,
         )
 
         checkpointer = get_postgres_saver()
@@ -249,8 +262,9 @@ class MainGraphOrchestrator(IAgentOrchestrator):
                 "research_sources": [],
                 "prepared_segments": [],
                 "doc_count": 0,
-                "kb_miss": False,
-                "kb_build_attempted": False,
+                # Do NOT seed kb_miss / kb_build_attempted here. Re-seeding
+                # kb_build_attempted=False on every /chat turn used to wipe the
+                # sticky flag (before keep_true) and re-ask to build an existing KB.
             }
         return {
             **base,

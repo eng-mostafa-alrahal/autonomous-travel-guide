@@ -21,7 +21,7 @@ flowchart TD
 |------|------|----------------|
 | `confirm_build` | HITL (`interrupt()`) | Warn the user deep research may take a while; wait for approve/reject. Marks `kb_destinations.status = building` on approval. |
 | `deep_research` | async I/O | Compose a research brief from `city`/`country`/`topics` and call the Jina DeepSearch client. Stores raw text + sources in state. |
-| `deduplicate` | LLM (structured) | Remove redundant/overlapping content and organize the research into topic-tagged segments (`PreparedKnowledge`). |
+| `deduplicate` | LLM (structured) | Keep each DeepSearch report verbatim and add extra long-form chapters from the model's own knowledge (`PreparedKnowledge`). |
 | `ingest` | async I/O | Send the cleaned segments to the `IngestionService`; store vectors in pgvector. On success marks `status = ready` + `doc_count`; on failure marks `status = failed`. |
 | `notify_complete` | sync | Emit an `AIMessage` telling the user the destination KB is ready. |
 
@@ -69,12 +69,12 @@ Clean-architecture boundaries are preserved: the graph (infrastructure) depends 
 
 Each knowledge segment becomes its own job, so per-topic metadata survives. Jobs run concurrently up to `INGESTION_MAX_CONCURRENCY`.
 
-1. `POST /ingest/text` `{ texts, embedding_pipeline: "chunk_then_embed", macro_splitter, embedder_provider, embedding_model, embedding_dimensions }` -> `{ job_id }`.
+1. `POST /ingest/text` `{ texts, embedding_pipeline, macro_splitter, embedder_provider, embedding_model, embedding_dimensions, late_chunk_min_tokens, late_chunk_max_tokens }` -> `{ job_id }`.
 2. Poll `GET /jobs/{job_id}` every `INGESTION_POLL_INTERVAL_S` until `status` in `{completed, failed}`, bounded by `INGESTION_POLL_TIMEOUT_S`. A `failed` status raises with `error_message`.
 3. `GET /jobs/{job_id}/results` -> `{ chunks: [{ index, text, embedding, metadata }] }` (retry on `409 job_results_not_ready`).
 4. Upsert `text + embedding + metadata` into pgvector via `PGVector.add_embeddings` without re-embedding, adding `{destination_key, city, country, topic, source}`.
 
-**Consistency rule (enforced):** the adapter pins `embedder_provider`, `embedding_model`, and `embedding_dimensions` on every submit rather than relying on server defaults, and **raises if a returned vector's width differs from `EMBEDDING_DIMENSIONS`**. Storing mismatched vectors would make those documents permanently unsearchable by the city expert. The service's `late_chunking` pipeline always uses Jina, so it is incompatible with our OpenAI query-time embedder — the adapter always requests `chunk_then_embed`.
+**Consistency rule (enforced):** the adapter pins `embedder_provider`, `embedding_model`, `embedding_dimensions`, and `embedding_pipeline` on every submit. Query-time embeddings in `build_pgvector_store()` must use the same model/dimensions (Jina v3 @ 1024 when using `late_chunking`). The adapter raises if a returned vector's width differs from `EMBEDDING_DIMENSIONS`.
 
 Errors come back as `{detail, code}` and are surfaced with the code attached (e.g. `401` invalid key, `422 invalid_embedding_dimensions` including the allowed min/max). Valid dimension ranges per model: `GET /api/v1/embeddings/dimension-constraints` (our `text-embedding-3-small` allows 256–1536; we use 1536).
 
@@ -86,7 +86,7 @@ uv run python scripts/check_ingestion_service.py
 
 ## Prompts
 
-- Intent `KNOWLEDGE_DEDUP` (`knowledge_builder/dedup_v1.md.jinja`) — paired with the shared `STRUCTURED_OUTPUT_SYSTEM` system prompt, emits `PreparedKnowledge`.
+- Intent `KNOWLEDGE_DEDUP` (`knowledge_builder/enrich_v1.md.jinja`) — paired with the shared `STRUCTURED_OUTPUT_SYSTEM` system prompt. The node stores each DeepSearch report as-is, then asks the LLM only for **additional** long-form chapters (not a summary).
 - Registered in `app/core/config/prompt_registry.toml`.
 
 ## Wiring status
@@ -94,6 +94,8 @@ uv run python scripts/check_ingestion_service.py
 Stage 1 built the subgraph and all its dependencies as standalone, testable units. **Stage 3** wires it into the **travel master graph** (`travel_master_builder.py`, state `TravelRootState`) alongside the Travel Planner:
 
 - The Planner's `city_expert` auto-triggers a build on a KB miss; the master routes Planner → `knowledge_builder` → `after_build` → Planner (re-plan). See [Travel Planner § Stage 3](./travel-planner.md#stage-3--kb-miss-auto-trigger-master-graph).
+- A miss is **retrieval empty and** no `kb_destinations` row with `status=ready`. If the row is already ready (e.g. query embedder glitch), the planner falls back to web search instead of asking to rebuild.
+- Query-time embeddings must match ingest: Jina v3 via `EMBEDDING_BASE_URL=https://api.jina.ai/v1` with `check_embedding_ctx_length=False` (see [`configuration.md`](./configuration.md)).
 - `confirm_build`'s `interrupt()` is the approval gate. On **reject**, the builder ends without ingesting (nothing written to the KB) and the Planner falls back to web search.
 - The master is selected by `MainGraphOrchestrator` when `TRAVEL_PLANNER_ENABLED` is true.
 

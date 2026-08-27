@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from app.modules.agent_orchestration.domain.phases import merge_phase
+from app.modules.agent_orchestration.domain.phases import keep_true, merge_phase
 from app.modules.agent_orchestration.domain.states.base_state import BaseAgentState
 
 
@@ -37,4 +37,4 @@ class TravelPlannerState(BaseAgentState):
     city: str | None
     country: str | None
     kb_miss: bool
-    kb_build_attempted: bool
+    kb_build_attempted: Annotated[bool, keep_true]

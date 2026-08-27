@@ -26,3 +26,7 @@ class PromptContext(BaseModel):
         default="",
         description="Joined tool outputs for validation rounds.",
     )
+    extra_section: str = Field(
+        default="",
+        description="Optional extra heading (e.g. knowledge-builder research theme).",
+    )

@@ -46,17 +46,18 @@ async def main() -> int:
         "Content-Type": "application/json",
     }
     async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=120.0) as client:
-        submit = await client.post(
-            "/api/v1/ingest/text",
-            json={
-                "texts": [SAMPLE],
-                "embedding_pipeline": "chunk_then_embed",
-                "macro_splitter": settings.INGESTION_MACRO_SPLITTER,
-                "embedder_provider": settings.INGESTION_EMBEDDER_PROVIDER,
-                "embedding_model": settings.EMBEDDING_MODEL,
-                "embedding_dimensions": settings.EMBEDDING_DIMENSIONS,
-            },
-        )
+        payload = {
+            "texts": [SAMPLE],
+            "embedding_pipeline": settings.INGESTION_EMBEDDING_PIPELINE,
+            "macro_splitter": settings.INGESTION_MACRO_SPLITTER,
+            "embedder_provider": settings.INGESTION_EMBEDDER_PROVIDER,
+            "embedding_model": settings.EMBEDDING_MODEL,
+            "embedding_dimensions": settings.EMBEDDING_DIMENSIONS,
+        }
+        if settings.INGESTION_EMBEDDING_PIPELINE == "late_chunking":
+            payload["late_chunk_min_tokens"] = settings.INGESTION_LATE_CHUNK_MIN_TOKENS
+            payload["late_chunk_max_tokens"] = settings.INGESTION_LATE_CHUNK_MAX_TOKENS
+        submit = await client.post("/api/v1/ingest/text", json=payload)
         print(f"[submit] {submit.status_code} {submit.text[:300]}")
         if submit.status_code != 200:
             return 1

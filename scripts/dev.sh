@@ -13,4 +13,4 @@ else
   uv sync --extra dev
 fi
 
-uv run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload --loop app.core.event_loop:selector_loop_factory

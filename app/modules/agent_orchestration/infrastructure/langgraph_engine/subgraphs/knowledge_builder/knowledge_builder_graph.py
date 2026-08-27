@@ -1,7 +1,8 @@
 """Knowledge-builder subgraph.
 
-Pipeline: confirm_build (HITL) -> deep_research (Jina) -> deduplicate (LLM)
--> ingest (pgvector) -> notify_complete. Linear with an approve/reject branch
+Pipeline: confirm_build (HITL) -> deep_research (Jina, one brief per topic
+cluster, run concurrently) -> enrich (keep reports + LLM extra chapters) ->
+ingest (pgvector) -> notify_complete. Linear with an approve/reject branch
 and short-circuit to END on errors.
 
 This builder returns an UNCOMPILED ``StateGraph``; the caller compiles it (and
@@ -10,6 +11,7 @@ attaches a checkpointer) when wiring it into the master graph.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -54,6 +56,66 @@ DEFAULT_TOPICS: list[str] = [
     "best time to visit",
 ]
 
+# Topic clusters used for multi-call deep research (KB_RESEARCH_CALLS > 1).
+# Each cluster gets its own DeepSearch call so no single answer has to cover
+# everything — one combined brief compresses into a shallow summary.
+RESEARCH_TOPIC_CLUSTERS: list[tuple[str, str]] = [
+    (
+        "History, Culture & Identity",
+        "history from founding to today; cultural identity and local mentality; "
+        "art, architecture and signature styles; important museums and their "
+        "must-see highlights; religious customs, traditions and culturally "
+        "rooted festivals",
+    ),
+    (
+        "Neighborhoods & Where to Stay",
+        "character, atmosphere, safety and rough price level of the main "
+        "neighborhoods; which areas suit families / nightlife seekers / budget / "
+        "luxury travelers; typical accommodation types with rough nightly price "
+        "ranges; areas travelers should avoid",
+    ),
+    (
+        "Attractions, Itineraries & Day Trips",
+        "top attractions and landmarks with practical details (typical ticket "
+        "prices, opening patterns, booking / skip-the-line advice); lesser-known "
+        "hidden gems; ready-made 1-day / 3-day / 1-week itinerary ideas; best "
+        "day trips and exactly how to reach them",
+    ),
+    (
+        "Food, Drink & Nightlife",
+        "must-try local dishes and drinks using the names locals use; "
+        "restaurant / street-food / market scene with rough price ranges; famous "
+        "food markets; dining customs (meal times, reservations, tipping); bar "
+        "and nightlife districts; signature shopping (souvenirs, local products)",
+    ),
+    (
+        "Getting There & Getting Around",
+        "airport(s) and every transfer option into the city with costs and "
+        "durations; public transport network (metro / bus / tram) with ticket "
+        "types, passes and prices; taxis and ride-hailing; walkability and "
+        "cycling; regional trains/buses used for day trips; the reality of "
+        "driving and parking",
+    ),
+    (
+        "Practical Knowledge, Safety & Seasonality",
+        "safety situation and common tourist scams with avoidance tips; "
+        "emergency numbers and tourist healthcare access; local customs and "
+        "etiquette (dress codes, greetings, gestures); useful local-language "
+        "phrases; money: currency, cards vs cash, tipping norms; SIM/eSIM and "
+        "connectivity; best time to visit, month-by-month weather, peak/low "
+        "seasons, major annual events; accessibility notes; traveling with "
+        "children; LGBTQ+ considerations",
+    ),
+]
+
+_DEPTH_REQUIREMENTS = (
+    "Write an exhaustive, long-form report — a thorough guidebook chapter, not "
+    "a summary. Name many concrete specifics: place names, neighborhoods, dish "
+    "names, transit lines and stops, ticket/pass names, typical costs, seasonal "
+    "timing, exact warnings. Prefer authoritative sources. Do not compress lists "
+    "of specific options into generic statements."
+)
+
 
 def _where(state: KnowledgeBuilderState) -> str:
     parts = [p for p in (state.get("city"), state.get("country")) if p]
@@ -64,12 +126,44 @@ def _compose_brief(state: KnowledgeBuilderState, default_topics: list[str]) -> s
     topics = state.get("topics") or default_topics
     topic_lines = "\n".join(f"- {t}" for t in topics)
     return (
-        f"Research {_where(state)} for a travel knowledge base. "
-        "Provide detailed, factual, up-to-date information covering:\n"
+        f"Research {_where(state)} for a travel knowledge base that must answer "
+        "any question a traveler might ask. Provide detailed, factual, "
+        "up-to-date information covering:\n"
         f"{topic_lines}\n\n"
-        "Prefer authoritative sources. Include concrete specifics (place names, "
-        "neighborhoods, dishes, transit options, seasons, costs where relevant)."
+        f"{_DEPTH_REQUIREMENTS}"
     )
+
+
+def _compose_cluster_brief(state: KnowledgeBuilderState, label: str, details: str) -> str:
+    return (
+        f"Research {_where(state)} for a travel knowledge base. "
+        f"This report covers exactly one theme: {label}.\n\n"
+        f"Cover in depth: {details}.\n\n"
+        f"{_DEPTH_REQUIREMENTS}"
+    )
+
+
+def plan_research_briefs(
+    state: KnowledgeBuilderState,
+    default_topics: list[str],
+    *,
+    research_calls: int,
+    clusters: list[tuple[str, str]] | None = None,
+) -> list[tuple[str, str]]:
+    """Return the (label, brief) pairs the deep_research node will execute.
+
+    ``research_calls <= 1`` produces one combined brief; otherwise one brief
+    per topic cluster (capped by ``research_calls``) so each DeepSearch run can
+    go deep instead of shallow-wide.
+    """
+    if research_calls <= 1:
+        return [("Full destination research", _compose_brief(state, default_topics))]
+    available = clusters if clusters is not None else RESEARCH_TOPIC_CLUSTERS
+    selected = available[: max(1, research_calls)]
+    return [
+        (label, _compose_cluster_brief(state, label, details))
+        for label, details in selected
+    ]
 
 
 def build_knowledge_builder_graph(
@@ -80,6 +174,8 @@ def build_knowledge_builder_graph(
     ingestion_service: IIngestionService,
     kb_status_service: KBStatusService,
     default_topics: list[str] | None = None,
+    research_calls: int = 1,
+    research_max_concurrency: int = 3,
 ) -> StateGraph:
     topics = default_topics or DEFAULT_TOPICS
 
@@ -126,28 +222,59 @@ def build_knowledge_builder_graph(
             city=state.get("city"),
             country=state.get("country"),
         )
-        try:
-            result = await deep_research_client.research(_compose_brief(state, topics))
-        except Exception as exc:
-            logger.exception("deep_research failed")
+        briefs = plan_research_briefs(state, topics, research_calls=research_calls)
+        semaphore = asyncio.Semaphore(max(1, research_max_concurrency))
+
+        async def run_brief(label: str, brief: str):
+            async with semaphore:
+                return label, await deep_research_client.research(brief)
+
+        outcomes = await asyncio.gather(
+            *(run_brief(label, brief) for label, brief in briefs),
+            return_exceptions=True,
+        )
+
+        sections: list[str] = []
+        sources: list[str] = []
+        failures: list[str] = []
+        for (label, _), outcome in zip(briefs, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                logger.warning("deep_research cluster %r failed: %s", label, outcome)
+                failures.append(f"{label}: {outcome}")
+                continue
+            _, result = outcome
+            if result.content.strip():
+                heading = f"## {label}" if len(briefs) > 1 else ""
+                sections.append(f"{heading}\n\n{result.content}".strip())
+                sources.extend(result.sources)
+
+        if not sections:
+            exc_text = "; ".join(failures) or "empty research result"
+            logger.error("deep_research failed for all %d briefs", len(briefs))
             await kb_status_service.mark_failed(
                 destination_key=state["destination_key"],
                 city=state.get("city"),
                 country=state.get("country"),
-                error_message=str(exc),
+                error_message=exc_text,
             )
             return {
-                "error": f"deep research failed: {exc}",
+                "error": f"deep research failed: {exc_text}",
                 "messages": [
                     AIMessage(content="The deep research step failed. Please try again later.")
                 ],
                 **phases.phase_update(phases.KNOWLEDGE_BUILD, "Deep research failed."),
             }
+
+        if failures:
+            logger.warning(
+                "deep_research partial: %d/%d clusters failed", len(failures), len(briefs)
+            )
+
         return {
-            "raw_research": result.content,
-            "research_sources": result.sources,
+            "raw_research": "\n\n".join(sections),
+            "research_sources": list(dict.fromkeys(sources)),
             **phases.phase_update(
-                phases.KNOWLEDGE_BUILD, "Sorting through the research findings."
+                phases.KNOWLEDGE_BUILD, "Expanding the research with extra guidebook chapters, then storing it."
             ),
         }
 

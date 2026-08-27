@@ -1,0 +1,26 @@
+---
+version: "2.0"
+model_target: structured-output
+trace_tags:
+  agent: knowledge_builder
+  prompt_key: knowledge_dedup
+---
+{{ goal_section }}You are building the destination knowledge base that powers a retrieval-based travel assistant. Below is raw deep-research text (it may contain several concatenated research reports, plus repetition, contradictions, and marketing fluff). Once built, travelers will ask a vast and unpredictable range of questions about this destination, so the knowledge base must be as COMPREHENSIVE as possible — not a summary.
+
+Raw research:
+
+{{ retrieved_evidence }}
+
+Transform the research into a set of long-form knowledge segments, one per topic. Rules, in priority order:
+
+1. COVERAGE FIRST. Produce 8–15 segments that together span the full breadth of traveler questions. Cover at least: history, culture, neighborhoods, where_to_stay, attractions_landmarks, itineraries, day_trips, food_drink, nightlife, shopping, transport, airport_transfers, safety_scams, customs_etiquette, language_basics, money_tipping, connectivity, weather_seasons, events_festivals, accessibility, family_travel. Add extra segments whenever the research contains rich material on other themes.
+2. PRESERVE EVERY CONCRETE FACT from the research: place names, neighborhoods, dish names, transit lines and stops, ticket/pass names, typical costs, opening patterns, seasonal timing, explicit warnings. Never compress a list of ten specific places into "many options".
+3. ENRICH, DO NOT SUMMARIZE. Expand each segment with your own reliable, well-established knowledge about this destination. The research is the backbone; your knowledge fills gaps and adds depth. Each finished segment should read like a thorough guidebook chapter, combining the research with what you know.
+4. For volatile specifics (exact prices, hours, schedules) that are not confirmed by the research, give typical ranges and phrase them as approximate rather than inventing precise figures.
+5. Merge duplicated or overlapping material across the reports. When sources contradict each other, prefer the research over your priors.
+6. Each segment must be self-contained prose of roughly 250–600 words — several well-developed paragraphs, understandable with no other context. Short or fragmentary sections are a failure.
+7. Use short lowercase topic labels (snake_case where needed, e.g. "safety_scams", "day_trips").
+
+Return only the structured object with these fields:
+
+{{ compact_schema }}

@@ -81,6 +81,24 @@ def test_workspace_context_validation_renders(registry_paths: tuple[Path, Path])
     assert dto.metadata.get("intent") == "workspace_context_validation"
 
 
+def test_knowledge_enrich_prompt_renders(registry_paths: tuple[Path, Path]) -> None:
+    assets_dir, registry_path = registry_paths
+    reg = FilePromptRegistry(assets_dir=assets_dir, registry_path=registry_path)
+    dto = reg.resolve_prompt(
+        PromptIntent.KNOWLEDGE_DEDUP,
+        PromptContext(
+            goal_section="Destination: Rome, Italy.\n\n",
+            extra_section="Food, Drink & Nightlife",
+            retrieved_evidence="Try cacio e pepe in Testaccio.",
+            compact_schema="- segments",
+        ),
+    )
+    assert "EXPAND, NEVER SUMMARIZE" in dto.content
+    assert "Food, Drink & Nightlife" in dto.content
+    assert "cacio e pepe" in dto.content
+    assert dto.metadata.get("version") == "3.0"
+
+
 def test_missing_registered_intent_raises(tmp_path: Path) -> None:
     reg_file = tmp_path / "prompt_registry.toml"
     reg_file.write_text("[intents]\n", encoding="utf-8")

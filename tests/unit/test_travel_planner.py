@@ -21,19 +21,42 @@ from app.modules.agent_orchestration.domain.states.travel_planner_state import (
 
 def test_trip_requirements_missing_when_empty():
     req = TripRequirements()
-    assert set(req.missing_required()) == {"destination", "num_days", "budget"}
+    assert set(req.missing_required()) == {"destination", "origin", "num_days", "budget"}
     assert req.is_complete() is False
 
 
 def test_trip_requirements_complete_with_city_only():
-    req = TripRequirements(destination_city="Paris", num_days=3, budget="$1000")
+    req = TripRequirements(
+        destination_city="Paris", origin_city="New York", num_days=3, budget="$1000"
+    )
     assert req.missing_required() == []
     assert req.is_complete() is True
 
 
 def test_trip_requirements_country_satisfies_destination():
-    req = TripRequirements(destination_country="Japan", num_days=5, budget="mid-range")
+    req = TripRequirements(
+        destination_country="Japan", origin_city="Seoul", num_days=5, budget="mid-range"
+    )
     assert "destination" not in req.missing_required()
+
+
+def test_trip_requirements_missing_origin():
+    req = TripRequirements(destination_city="Paris", num_days=3, budget="$1000")
+    assert req.missing_required() == ["origin"]
+    assert req.is_complete() is False
+
+
+def test_trip_requirements_origin_alias_coerced():
+    req = TripRequirements.model_validate(
+        {
+            "destination_city": "Rome",
+            "from_city": "Lisbon",
+            "num_days": 4,
+            "budget": "€2000",
+        }
+    )
+    assert req.origin_city == "Lisbon"
+    assert req.is_complete() is True
 
 
 def test_trip_requirements_interests_coerced_from_string():

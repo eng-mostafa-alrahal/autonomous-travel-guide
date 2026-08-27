@@ -1,4 +1,8 @@
-"""Structured output schema for the knowledge-builder deduplication step."""
+"""Structured output schema for knowledge-builder enrichment.
+
+The LLM does not rewrite DeepSearch reports. It only adds long-form chapters
+from its own knowledge so late-chunking has dense, paragraph-scale text.
+"""
 
 from __future__ import annotations
 
@@ -8,28 +12,38 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class KnowledgeSegment(BaseModel):
-    """A single deduplicated, topic-tagged piece of destination knowledge."""
+    """One additional guidebook chapter (not a summary of the research)."""
 
     model_config = ConfigDict(extra="ignore")
 
     topic: str = Field(
         ...,
-        description="Short topic label, e.g. 'history', 'food', 'culture', 'transport'.",
+        description=(
+            "Short snake_case topic for this extra chapter, e.g. "
+            "'neighborhoods_trastevere', 'scams_pickpockets', 'day_trip_tivoli'."
+        ),
     )
     content: str = Field(
         ...,
-        description="Self-contained, non-redundant prose about the topic.",
+        description=(
+            "NEW long-form guidebook prose (several paragraphs, typically 600–1500 words / "
+            "800–2000 tokens). Add what the research missed or treated thinly, using your "
+            "own reliable knowledge. Do not summarize, paraphrase, or shorten the research."
+        ),
     )
 
 
 class PreparedKnowledge(BaseModel):
-    """The LLM outputs this after removing redundancy and organizing by topic."""
+    """Additional chapters only — the original research is stored separately."""
 
     model_config = ConfigDict(extra="ignore")
 
     segments: list[KnowledgeSegment] = Field(
         default_factory=list,
-        description="Cleaned, deduplicated knowledge segments grouped by topic.",
+        description=(
+            "3–8 extra in-depth chapters for THIS theme only. Each chapter must be long "
+            "enough for late-chunking (dense paragraphs, not bullet summaries)."
+        ),
     )
 
     @model_validator(mode="before")

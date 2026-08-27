@@ -44,6 +44,9 @@ class HttpIngestionAdapter(IIngestionService):
         embedding_dimensions: int,
         embedder_provider: str = "openai",
         macro_splitter: str = "recursive",
+        embedding_pipeline: str = "chunk_then_embed",
+        late_chunk_min_tokens: int = 800,
+        late_chunk_max_tokens: int = 2000,
         request_timeout_s: float = 60.0,
         poll_timeout_s: float = 300.0,
         poll_interval_s: float = 2.0,
@@ -55,6 +58,9 @@ class HttpIngestionAdapter(IIngestionService):
         self._embedding_dimensions = embedding_dimensions
         self._embedder_provider = embedder_provider
         self._macro_splitter = macro_splitter
+        self._embedding_pipeline = embedding_pipeline
+        self._late_chunk_min_tokens = late_chunk_min_tokens
+        self._late_chunk_max_tokens = late_chunk_max_tokens
         self._request_timeout_s = request_timeout_s
         self._poll_timeout_s = poll_timeout_s
         self._poll_interval_s = poll_interval_s
@@ -140,14 +146,17 @@ class HttpIngestionAdapter(IIngestionService):
         return await self._fetch_results(client, job_id)
 
     async def _submit(self, client: httpx.AsyncClient, content: str) -> str:
-        payload = {
+        payload: dict[str, Any] = {
             "texts": [content],
-            "embedding_pipeline": "chunk_then_embed",
+            "embedding_pipeline": self._embedding_pipeline,
             "macro_splitter": self._macro_splitter,
             "embedder_provider": self._embedder_provider,
             "embedding_model": self._embedding_model,
             "embedding_dimensions": self._embedding_dimensions,
         }
+        if self._embedding_pipeline == "late_chunking":
+            payload["late_chunk_min_tokens"] = self._late_chunk_min_tokens
+            payload["late_chunk_max_tokens"] = self._late_chunk_max_tokens
         try:
             resp = await client.post("/api/v1/ingest/text", json=payload)
             resp.raise_for_status()

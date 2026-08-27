@@ -18,6 +18,14 @@ def test_phase_update_carries_phase_and_status():
     }
 
 
+def test_keep_true_sticky_flag():
+    assert phases.keep_true(False, False) is False
+    assert phases.keep_true(True, False) is True
+    assert phases.keep_true(False, True) is True
+    assert phases.keep_true(None, False) is False
+    assert phases.keep_true(None, True) is True
+
+
 def test_specialist_status_uses_role_template():
     assert phases.specialist_status("hotels", "Kyoto") == "Looking into places to stay in Kyoto."
 

@@ -17,9 +17,12 @@ from langgraph.graph import END, StateGraph
 
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
 from app.modules.agent_orchestration.application.ports.travel_providers_port import (
+    IFlightsProvider,
+    IHotelsProvider,
     IPlacesProvider,
     ITransitProvider,
 )
+from app.modules.agent_orchestration.application.use_cases.kb_status_service import KBStatusService
 from app.modules.agent_orchestration.domain.routing_rules.travel_planner_router import (
     fan_out_specialists,
     route_after_requirements,
@@ -50,10 +53,13 @@ def build_travel_planner_graph(
     prompt_provider: IPromptProvider,
     web_search_tool: BaseTool | None = None,
     retriever_provider: RetrieverProvider | None = None,
+    kb_status_service: KBStatusService | None = None,
     requirements_llm: BaseChatModel | None = None,
     logistician_llm: BaseChatModel | None = None,
     transit_provider: ITransitProvider | None = None,
     places_provider: IPlacesProvider | None = None,
+    hotels_provider: IHotelsProvider | None = None,
+    flights_provider: IFlightsProvider | None = None,
 ) -> StateGraph:
     req_llm = requirements_llm or llm
     logistics_llm = logistician_llm or llm
@@ -72,12 +78,17 @@ def build_travel_planner_graph(
             retriever_provider=retriever_provider,
             web_search_tool=web_search_tool,
             places_provider=places_provider,
+            kb_status_service=kb_status_service,
         ),
     )
     graph.add_node(
         "hotels",
         make_specialist_node(
-            "hotels", llm=llm, prompt_provider=prompt_provider, web_search_tool=web_search_tool
+            "hotels",
+            llm=llm,
+            prompt_provider=prompt_provider,
+            web_search_tool=web_search_tool,
+            hotels_provider=hotels_provider,
         ),
     )
     graph.add_node(
@@ -87,6 +98,7 @@ def build_travel_planner_graph(
             llm=logistics_llm,
             prompt_provider=prompt_provider,
             web_search_tool=web_search_tool,
+            flights_provider=flights_provider,
         ),
     )
     graph.add_node(
