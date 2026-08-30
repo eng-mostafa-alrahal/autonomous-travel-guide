@@ -150,6 +150,7 @@ sequenceDiagram
 3. Call `POST /chat/` or `POST /chat/stream`.
 4. If `interrupted: true`, resume via `POST /runs/{thread_id}/resume`.
 5. Optionally poll `GET /runs/{thread_id}/state`.
+6. Reload a conversation UI with `GET /sessions/{session_id}/messages`.
 
 ---
 
@@ -169,6 +170,7 @@ sequenceDiagram
 | `POST` | `/sessions/` | Sessions | yes |
 | `GET` | `/sessions/` | Sessions | yes |
 | `GET` | `/sessions/{session_id}` | Sessions | yes (owner) |
+| `GET` | `/sessions/{session_id}/messages` | Sessions | yes (owner) |
 | `PATCH` | `/sessions/{session_id}` | Sessions | yes (owner) |
 | `DELETE` | `/sessions/{session_id}` | Sessions | yes (owner) |
 | `POST` | `/chat/` | Chat | yes |
@@ -552,6 +554,57 @@ curl http://localhost:8000/api/v1/sessions/$SESSION_ID \
 
 ---
 
+### `GET /sessions/{session_id}/messages` → `200`
+
+Return the conversation transcript for a session from the LangGraph checkpointer (`thread_id` == `session_id`). Ownership is required (non-owners get `404`). Sessions with no chat turns yet return an empty `messages` list.
+
+Internal memory-compaction summaries are always omitted. By default only `human` and `ai` turns are returned.
+
+| Path param | Type |
+|---|---|
+| `session_id` | UUID |
+
+| Query param | Type | Default | Description |
+|---|---|---|---|
+| `include_tools` | bool | `false` | Include tool-result messages |
+| `include_system` | bool | `false` | Include system messages |
+
+**Response — `SessionMessagesResponse`**
+
+```json
+{
+  "session_id": "019d92bc-2c73-74e6-814a-b647e46f0bf5",
+  "messages": [
+    {
+      "type": "human",
+      "content": "Plan 5 days in Paris",
+      "id": "…",
+      "tool_calls": null
+    },
+    {
+      "type": "ai",
+      "content": "Happy to help — what's your budget?",
+      "id": "…",
+      "tool_calls": null
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `session_id` | UUID | Echo of path param |
+| `messages` | `SessionMessageItem[]` | Ordered transcript (`type`, `content`, optional `id` / `tool_calls`) |
+
+**curl**
+
+```bash
+curl "http://localhost:8000/api/v1/sessions/$SESSION_ID/messages" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
 ### `PATCH /sessions/{session_id}` → `200`
 
 Rename a session.
@@ -653,8 +706,30 @@ Single-response invocation: run the agent until completion or a human-in-the-loo
   "thread_id": "019d92bc-2c73-74e6-814a-b647e46f0bf5",
   "approval_request": {
     "kind": "requirements",
-    "message": "To plan your trip I still need origin city and budget. Could you share those details?",
-    "missing": ["origin_city", "budget"]
+    "message": "Nice! And where will you be leaving from?",
+    "missing": ["origin"]
+  }
+}
+```
+
+**Interrupted — destination spelling / ambiguity** (`kind: destination_confirm`)
+
+```json
+{
+  "session_id": "019d92bc-2c73-74e6-814a-b647e46f0bf5",
+  "reply": "",
+  "interrupted": true,
+  "thread_id": "019d92bc-2c73-74e6-814a-b647e46f0bf5",
+  "approval_request": {
+    "kind": "destination_confirm",
+    "message": "Just to be sure — \"Paris\" could mean a few places. Which one did you mean? 1) Paris, France; 2) Paris, Texas, United States (reply with a number or the full place name.)",
+    "reason": "ambiguous",
+    "candidates": [
+      {"city": "Paris", "country": "France", "label": "Paris, France"},
+      {"city": "Paris", "country": "United States", "label": "Paris, Texas, United States"}
+    ],
+    "suggested_city": "Paris",
+    "suggested_country": "France"
   }
 }
 ```
@@ -669,7 +744,7 @@ Single-response invocation: run the agent until completion or a human-in-the-loo
   "thread_id": "019d92bc-2c73-74e6-814a-b647e46f0bf5",
   "approval_request": {
     "kind": "kb_build",
-    "message": "I don't have a knowledge base for Paris, France yet. I can research it now, but deep research may take a few minutes. Want me to start?",
+    "message": "I don't know Paris, France well yet. I can look it up thoroughly so your plan feels more personal (it may take a few minutes). Want me to?",
     "destination_key": "paris|france",
     "city": "Paris",
     "country": "France"
@@ -723,7 +798,8 @@ Schemas: `approval_schema.py`
 | `approval_request.kind` | Raised by | How to resume |
 |---|---|---|
 | `requirements` | Travel planner missing required slots (`missing` lists them) | Prefer `feedback` with the user’s answer; `action` is still required by the schema |
-| `kb_build` | Knowledge builder wants approval before deep research | `action`: `"approved"` or `"rejected"` |
+| `kb_build` | Knowledge builder wants approval before researching a destination | `action`: `"approved"` or `"rejected"` |
+| `destination_confirm` | Planner needs the traveller to confirm a misspelled or ambiguous place | free-text answer, `{"index": N}`, `{"city","country"}`, or `"yes"` for the suggested match |
 
 Required trip slots (travel mode): **destination** (city and/or country), **`origin_city`**, **`num_days`**, **`budget`**. Optional: `start_date`, `party_size`, `interests`.
 
@@ -891,8 +967,8 @@ Emits the full per-node `AgentEvent` when there is message content or state upda
     }
   ],
   "updates": {},
-  "phase": "itinerary",
-  "phase_status": "Writing your day-by-day itinerary.",
+  "phase": "done",
+  "phase_status": "Here's a draft plan — we can tweak it together.",
   "namespace": []
 }
 ```
@@ -907,18 +983,18 @@ Emits the full per-node `AgentEvent` when there is message content or state upda
 
 #### `phases`
 
-Progress lines **plus** the same content chunks as `content` mode. Intended for long steps (deep research can run for minutes).
+Progress lines **plus** the same content chunks as `content` mode. Intended for long steps (thorough destination research can run for minutes). Status text is plain language for users — not backend jargon — and **may change between releases**.
 
 ```text
-data: {"phase":"requirements","status":"Getting started on your trip plan."}
+data: {"phase":"requirements","status":"Let's plan your trip together."}
 
-data: {"phase":"planning","status":"Researching local insights for Kyoto."}
+data: {"phase":"planning","status":"Learning about Kyoto."}
 
-data: {"phase":"knowledge_build","status":"Researching Kyoto in depth — this can take a few minutes."}
+data: {"phase":"knowledge_build","status":"Looking up Kyoto thoroughly — this can take a few minutes."}
 
-data: {"phase":"knowledge_build","status":"Knowledge base ready (34 entries)."}
+data: {"phase":"knowledge_build","status":"All set — I've got notes on Kyoto ready."}
 
-data: {"phase":"itinerary","status":"Writing your day-by-day itinerary."}
+data: {"phase":"done","status":"Here's a draft plan — we can tweak it together."}
 
 data: {"content":"# Day 1 — Higashiyama …"}
 
@@ -929,11 +1005,11 @@ Rules:
 
 - A chunk is either progress (`phase` + `status`) or content (`content`); distinguish by key.
 - `phase` is one of: `requirements`, `planning`, `knowledge_build`, `itinerary`, `done` (see `app/modules/agent_orchestration/domain/phases.py`).
-- `status` is user-facing prose and **may change between releases** — do not parse it for control flow.
+- `status` is user-facing prose and **may change between releases** — do not parse it for control flow. Prefer everyday wording over internal terms.
 - Identical consecutive progress lines are suppressed.
 - Legacy supervisor mode (`TRAVEL_PLANNER_ENABLED=false`) emits no phase lines, so `phases` degrades to `content`.
 
-> **Ordering:** a node announces the work that comes **next**, because LangGraph publishes a node’s state updates only after that node returns. A line like “Researching Kyoto in depth…” is emitted *before* the research call starts.
+> **Ordering:** a node announces the work that comes **next**, because LangGraph publishes a node’s state updates only after that node returns. A line like “Looking up Kyoto thoroughly…” is emitted *before* the research call starts.
 
 ---
 
@@ -1021,6 +1097,22 @@ Orchestrator DTOs (not always returned raw): `app/modules/agent_orchestration/ap
 | `title` | string |
 | `created_at` | datetime (UTC) |
 | `updated_at` | datetime (UTC) |
+
+### `SessionMessagesResponse`
+
+| Field | Type | Notes |
+|---|---|---|
+| `session_id` | UUID | Session whose history was loaded |
+| `messages` | `SessionMessageItem[]` | Ordered transcript from the checkpointer |
+
+### `SessionMessageItem`
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | `"human"` \| `"ai"` \| `"system"` \| `"tool"` | Role |
+| `content` | string | Message text |
+| `id` | string \| null | Optional framework message id |
+| `tool_calls` | object[] \| null | Present on some AI turns |
 
 ### `ChatResponse` / `ResumeResponse`
 

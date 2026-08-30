@@ -87,6 +87,31 @@ class MockPlacesProvider(IPlacesProvider):
             )
         return None
 
+    async def search_destinations(
+        self, query: str, *, limit: int = 5
+    ) -> list[dict[str, str | None]] | None:
+        city = lookup_city(query) or city_from_free_text(query)
+        if city is None:
+            return None
+        label = f"{city['display_name']}, {city['country']}"
+        hits: list[dict[str, str | None]] = [
+            {
+                "city": city["display_name"],
+                "country": city["country"],
+                "label": label,
+            }
+        ]
+        # Same-name ambiguity fixture for demos/tests (Paris, France vs Paris, Texas).
+        if city["display_name"].lower() == "paris":
+            hits.append(
+                {
+                    "city": "Paris",
+                    "country": "United States",
+                    "label": "Paris, Texas, United States",
+                }
+            )
+        return hits[:limit]
+
 
 class MockTransitProvider(ITransitProvider):
     async def leg(

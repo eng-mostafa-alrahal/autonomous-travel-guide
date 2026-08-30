@@ -22,7 +22,7 @@ flowchart TD
 | `confirm_build` | HITL (`interrupt()`) | Warn the user deep research may take a while; wait for approve/reject. Marks `kb_destinations.status = building` on approval. |
 | `deep_research` | async I/O | Compose a research brief from `city`/`country`/`topics` and call the Jina DeepSearch client. Stores raw text + sources in state. |
 | `deduplicate` | LLM (structured) | Keep each DeepSearch report verbatim and add extra long-form chapters from the model's own knowledge (`PreparedKnowledge`). |
-| `ingest` | async I/O | Send the cleaned segments to the `IngestionService`; store vectors in pgvector. On success marks `status = ready` + `doc_count`; on failure marks `status = failed`. |
+| `ingest` | async I/O | Send the cleaned segments to the `IngestionService`; store vectors in pgvector. Retries the **same** `prepared_segments` up to 2 more times on failure (3 attempts total) — does **not** re-run deep research. On success marks `status = ready` + `doc_count`; on final failure marks `status = failed`. |
 | `notify_complete` | sync | Emit an `AIMessage` telling the user the destination KB is ready. |
 
 The graph is **linear with one branch** (approve/reject) — no loops — so the state uses plain fields (no list reducers beyond the inherited `messages`). The one exception: `phase` / `phase_status` carry the `merge_phase` reducer, shared with the planner/root states so parallel specialists can write progress concurrently (see [Travel Planner § progress reporting](./travel-planner.md)).
@@ -105,11 +105,13 @@ This graph is where the long silences happen — deep research alone is bounded 
 
 | Node | Announces |
 |------|-----------|
-| `confirm_build` (approved) | "Researching {destination} in depth — this can take a few minutes." |
-| `confirm_build` (rejected) | Falls back to `planning`: "Skipping the knowledge build — using web search instead." |
-| `deep_research` | "Sorting through the research findings." (or "Deep research failed.") |
-| `deduplicate` | "Storing what I learned in the knowledge base." |
-| `ingest` | "Knowledge base ready (N entries)." (or the storage failure) |
+| `confirm_build` (approved) | "Looking up {destination} thoroughly — this can take a few minutes." |
+| `confirm_build` (rejected) | Falls back to `planning`: "Skipping the deep dive — using quick web results instead." |
+| `deep_research` | "Organizing what I found into a handy guide." (or "Couldn't finish the research.") |
+| `deduplicate` | "Saving the guide so I can use it for your trip." |
+| `ingest` | "All set — I've got notes on {destination} ready." (or storage failure) |
+
+Progress lines are plain language for travellers — they avoid backend terms like “knowledge base” or “deep research.”
 
 ## Human-in-the-loop
 

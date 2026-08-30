@@ -283,15 +283,15 @@ def make_city_expert_node(
                 "messages": [
                     AIMessage(
                         content=(
-                            f"I don't have a knowledge base for {dest} yet. I'd like to run a "
-                            "deep search to learn about it (this can take a few minutes). "
-                            "I'll ask you to approve it next."
+                            f"I haven't learned about {dest} yet. I can dig in first "
+                            "(it can take a few minutes) so the plan feels more personal — "
+                            "I'll ask before I start."
                         )
                     )
                 ],
                 **phases.phase_update(
                     phases.KNOWLEDGE_BUILD,
-                    f"No knowledge base for {dest} yet — asking to run deep research.",
+                    f"I haven't covered {dest} yet — checking if you'd like me to research it.",
                 ),
             }
 
@@ -329,7 +329,8 @@ def make_city_expert_node(
             # The three remaining specialists are about to fan out and run in
             # parallel; they announce themselves as each finishes.
             **phases.phase_update(
-                phases.PLANNING, f"Local insights ready — now covering {dest} in depth."
+                phases.PLANNING,
+                f"Got a feel for {dest} — checking stays, food, and how to get around.",
             ),
         }
 

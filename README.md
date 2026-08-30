@@ -19,7 +19,7 @@ Production-oriented FastAPI + LangGraph backend that **plans personalised trips*
 
 ### Platform (shared infrastructure)
 
-- FastAPI API under `/api/v1` with auth, user, session, chat, and run-state endpoints
+- FastAPI API under `/api/v1` with auth, user, session (incl. message history), chat, and run-state endpoints
 - LangGraph orchestrator in `app/modules/agent_orchestration` (travel master graph or template supervisor graph)
 - SQLAlchemy async persistence (PostgreSQL + pgvector), Alembic migrations, Redis, JWT auth
 - Optional Celery worker path for deferred/background graph execution

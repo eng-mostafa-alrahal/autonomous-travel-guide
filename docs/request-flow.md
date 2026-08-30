@@ -100,7 +100,13 @@ Same orchestrator, different entry point:
 
 ### State inspection: `GET /api/v1/runs/{thread_id}/state`
 
-Wraps `orchestrator.get_state(...)`, returning a `RunStateSnapshot` DTO. Read-only — does not advance the graph.
+Wraps `orchestrator.get_state(...)`, returning a `RunStateSnapshot` DTO (interrupted flag, next nodes, tasks). Read-only — does not advance the graph.
+
+### Message history: `GET /api/v1/sessions/{session_id}/messages`
+
+1. `SessionService.get_session(...)` enforces ownership.
+2. `orchestrator.get_state(thread_id=session_id)` loads the checkpoint (messages live on `AgentStateSnapshot.messages`).
+3. The router filters via `visible_chat_history` (drops internal memory summaries; optional tool/system via query flags) and returns `SessionMessagesResponse`.
 
 ## Authentication path
 

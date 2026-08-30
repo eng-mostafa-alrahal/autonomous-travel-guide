@@ -47,6 +47,30 @@ def is_internal_memory_summary_message(message: AgentMessage) -> bool:
     return message.content.lstrip().startswith(_INTERNAL_MEMORY_SUMMARY_PREFIX)
 
 
+def visible_chat_history(
+    messages: list[AgentMessage],
+    *,
+    include_tools: bool = False,
+    include_system: bool = False,
+) -> list[AgentMessage]:
+    """Filter checkpoint messages down to a client-facing conversation transcript.
+
+    Always drops internal memory-compaction summaries. Tool / system turns are
+    omitted unless explicitly requested.
+    """
+    allowed: set[MessageRole] = {"human", "ai"}
+    if include_tools:
+        allowed.add("tool")
+    if include_system:
+        allowed.add("system")
+
+    return [
+        m
+        for m in messages
+        if m.type in allowed and not is_internal_memory_summary_message(m)
+    ]
+
+
 class AgentRunResult(BaseModel):
     """Final output of a single graph invocation (sync or resumed)."""
 
@@ -96,3 +120,4 @@ class AgentStateSnapshot(BaseModel):
     interrupted: bool
     next_nodes: list[str] = Field(default_factory=list)
     tasks: list[AgentTaskSnapshot] = Field(default_factory=list)
+    messages: list[AgentMessage] = Field(default_factory=list)

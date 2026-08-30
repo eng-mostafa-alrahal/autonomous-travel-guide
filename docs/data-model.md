@@ -188,7 +188,8 @@ For every step of a run:
 
 ### Reading state
 
-- `orchestrator.get_state(thread_id)` → `AgentStateSnapshot`
+- `orchestrator.get_state(thread_id)` → `AgentStateSnapshot` (includes mapped `messages`)
+- `GET /api/v1/sessions/{session_id}/messages` — owner-facing transcript from that snapshot (internal memory summaries filtered out)
 - `orchestrator.resume(thread_id, action, feedback?)` — resumes from the last checkpoint
 - `orchestrator.invoke(message, session_id, user_id)` — appends a new user message and continues
 

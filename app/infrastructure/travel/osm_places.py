@@ -15,6 +15,11 @@ import httpx
 from app.modules.agent_orchestration.application.ports.travel_providers_port import (
     IPlacesProvider,
 )
+from app.modules.agent_orchestration.domain.destination_resolve import (
+    PlaceCandidate,
+    candidate_from_nominatim,
+    dedupe_candidates,
+)
 from app.modules.agent_orchestration.domain.schemas.travel_plan import POI
 
 logger = logging.getLogger(__name__)
@@ -74,11 +79,37 @@ class NominatimPlacesProvider(IPlacesProvider):
         return pois or None
 
     async def geocode(self, place: str) -> POI | None:
-        params = {"q": place, "format": "jsonv2", "limit": "1"}
+        params = {"q": place, "format": "jsonv2", "limit": "1", "addressdetails": "1"}
         data = await self._get("/search", params)
         if not data:
             return None
         return _to_poi(data[0])
+
+    async def search_destinations(
+        self, query: str, *, limit: int = 5
+    ) -> list[dict[str, str | None]] | None:
+        params = {
+            "q": query,
+            "format": "jsonv2",
+            "limit": str(max(limit * 2, 8)),  # over-fetch; filter to places
+            "addressdetails": "1",
+        }
+        data = await self._get("/search", params)
+        if not data:
+            return None
+        found: list[PlaceCandidate] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            cand = candidate_from_nominatim(item)
+            if cand is not None:
+                found.append(cand)
+        cleaned = dedupe_candidates(found, limit=limit)
+        if not cleaned:
+            return None
+        return [
+            {"city": c.city, "country": c.country, "label": c.label} for c in cleaned
+        ]
 
     async def _get(self, path: str, params: dict[str, str]) -> list[dict[str, Any]] | None:
         try:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from app.infrastructure.ingestion.chunking import chunk_text
 from app.modules.agent_orchestration.domain.kb_destination import build_destination_key
 from app.modules.agent_orchestration.domain.routing_rules.knowledge_builder_router import (
@@ -34,6 +36,66 @@ def test_route_after_research():
 def test_route_after_ingest():
     assert route_after_ingest({"error": None}) == "notify_complete"  # type: ignore[arg-type]
     assert route_after_ingest({"error": "x"}) == "end"  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_ingest_retries_same_segments_then_succeeds():
+    from app.modules.agent_orchestration.application.ports.ingestion_port import (
+        DestinationRef,
+        IIngestionService,
+        IngestionResult,
+        IngestionSegment,
+    )
+    from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.knowledge_builder.knowledge_builder_graph import (  # noqa: E501
+        ingest_segments_with_retries,
+    )
+
+    calls: list[int] = []
+
+    class _Flaky(IIngestionService):
+        async def ingest(
+            self, segments: list[IngestionSegment], *, destination: DestinationRef
+        ) -> IngestionResult:
+            calls.append(len(segments))
+            if len(calls) < 3:
+                raise RuntimeError(f"transient-{len(calls)}")
+            return IngestionResult(doc_count=len(segments), ids=["a"])
+
+    segments = [IngestionSegment(topic="history", content="lore", source="deep_research")]
+    dest = DestinationRef(destination_key="atlantis|", city="Atlantis")
+    result = await ingest_segments_with_retries(
+        _Flaky(), segments, dest, max_attempts=3, retry_delay_s=0
+    )
+    assert result.doc_count == 1
+    assert calls == [1, 1, 1]  # same payload each attempt; no re-research
+
+
+@pytest.mark.asyncio
+async def test_ingest_retries_exhausted_raises():
+    from app.modules.agent_orchestration.application.ports.ingestion_port import (
+        DestinationRef,
+        IIngestionService,
+        IngestionResult,
+        IngestionSegment,
+    )
+    from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.knowledge_builder.knowledge_builder_graph import (  # noqa: E501
+        ingest_segments_with_retries,
+    )
+
+    class _AlwaysFail(IIngestionService):
+        async def ingest(
+            self, segments: list[IngestionSegment], *, destination: DestinationRef
+        ) -> IngestionResult:
+            raise RuntimeError("down")
+
+    with pytest.raises(RuntimeError, match="down"):
+        await ingest_segments_with_retries(
+            _AlwaysFail(),
+            [IngestionSegment(topic="t", content="c")],
+            DestinationRef(destination_key="x|"),
+            max_attempts=3,
+            retry_delay_s=0,
+        )
 
 
 def test_build_destination_key_normalizes():

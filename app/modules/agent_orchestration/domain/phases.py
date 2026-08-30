@@ -2,6 +2,8 @@
 
 Nodes attach a ``phase`` plus a human-readable ``phase_status`` to their state
 updates; the SSE layer turns those into ``stream_detail=phases`` events.
+Status lines are plain language for travellers — avoid backend jargon
+(``specialist``, ``knowledge base``, node names, etc.).
 
 LangGraph emits a node's updates only *after* that node returns, so a node
 announces the work that comes **next** rather than what it just finished. The
@@ -22,14 +24,15 @@ KNOWLEDGE_BUILD: Phase = "knowledge_build"
 ITINERARY: Phase = "itinerary"
 DONE: Phase = "done"
 
+# Plain-language lines for the user — avoid internal role names / jargon.
 _SPECIALIST_STATUS: dict[str, str] = {
-    "city_expert": "Researching local insights for {destination}.",
-    "hotels": "Looking into places to stay in {destination}.",
-    "flights_logistics": "Working out how to reach and get around {destination}.",
-    "food": "Finding the best food in {destination}.",
+    "city_expert": "Learning about {destination}.",
+    "hotels": "Looking for places to stay in {destination}.",
+    "flights_logistics": "Figuring out how you'd get to {destination}.",
+    "food": "Scouting good places to eat in {destination}.",
 }
 
-_FALLBACK_SPECIALIST_STATUS = "Consulting the {role} specialist for {destination}."
+_FALLBACK_SPECIALIST_STATUS = "Looking into {destination} for you."
 
 
 def phase_update(phase: Phase, status: str) -> dict[str, str]:

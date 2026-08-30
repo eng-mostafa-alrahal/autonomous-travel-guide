@@ -21,6 +21,8 @@ class TravelRootState(BaseAgentState):
     requirements: dict[str, Any]
     requirements_complete: bool
     missing_slots: list[str]
+    preferences_asked: Annotated[bool, keep_true]
+    destination_confirmed: Annotated[bool, keep_true]
     specialist_outputs: Annotated[dict[str, list[dict[str, Any]]], merge_specialist_outputs]
     clusters: list[dict[str, Any]]
     itinerary: str | None

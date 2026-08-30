@@ -28,6 +28,9 @@ from app.modules.agent_orchestration.domain.routing_rules.travel_planner_router 
     route_after_requirements,
 )
 from app.modules.agent_orchestration.domain.states.travel_planner_state import TravelPlannerState
+from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.travel_planner.nodes.destination_confirm import (  # noqa: E501
+    make_confirm_destination_node,
+)
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.travel_planner.nodes.itinerary import (  # noqa: E501
     make_itinerary_node,
 )
@@ -70,6 +73,14 @@ def build_travel_planner_graph(
         make_collect_requirements_node(req_llm, prompt_provider=prompt_provider),
     )
     graph.add_node("ask_requirements", ask_requirements)
+    graph.add_node(
+        "confirm_destination",
+        make_confirm_destination_node(
+            req_llm,
+            prompt_provider=prompt_provider,
+            places_provider=places_provider,
+        ),
+    )
     graph.add_node(
         "city_expert",
         make_city_expert_node(
@@ -121,9 +132,15 @@ def build_travel_planner_graph(
     graph.add_conditional_edges(
         "collect_requirements",
         route_after_requirements,
-        {"city_expert": "city_expert", "ask_requirements": "ask_requirements", "end": END},
+        {
+            "city_expert": "city_expert",
+            "ask_requirements": "ask_requirements",
+            "confirm_destination": "confirm_destination",
+            "end": END,
+        },
     )
     graph.add_edge("ask_requirements", "collect_requirements")
+    graph.add_edge("confirm_destination", "city_expert")
     # city_expert gates on a KB miss; otherwise it fans the remaining specialists
     # out to run in parallel via Send. Each converges on spatial_cluster, which
     # LangGraph runs only once all three (and the Send branch itself) have settled.

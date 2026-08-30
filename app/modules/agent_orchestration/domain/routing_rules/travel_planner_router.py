@@ -19,10 +19,14 @@ SPECIALISTS: list[str] = [CITY_EXPERT, *PARALLEL_SPECIALISTS]
 
 def route_after_requirements(
     state: TravelPlannerState,
-) -> Literal["city_expert", "ask_requirements", "end"]:
+) -> Literal["city_expert", "ask_requirements", "confirm_destination", "end"]:
     if state.get("error"):
         return "end"
-    return "city_expert" if state.get("requirements_complete") else "ask_requirements"
+    if not state.get("requirements_complete"):
+        return "ask_requirements"
+    if not state.get("destination_confirmed"):
+        return "confirm_destination"
+    return "city_expert"
 
 
 def fan_out_specialists(state: TravelPlannerState) -> list[Send] | Literal["__end__"]:

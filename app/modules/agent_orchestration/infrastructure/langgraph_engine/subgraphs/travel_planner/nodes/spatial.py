@@ -87,7 +87,7 @@ def make_spatial_cluster_node(transit_provider: ITransitProvider | None = None):
             "clusters": clusters,
             **phases.phase_update(
                 phases.PLANNING,
-                f"Grouped {len(pois)} places into {len(clusters)} day(s) by location.",
+                "Organizing your days so you're not zigzagging across town.",
             ),
         }
 

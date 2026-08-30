@@ -99,6 +99,10 @@ curl -X POST http://localhost:8000/api/v1/chat/ \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"session_id":"'$SESSION_ID'","message":"Plan 5 days in Paris, budget mid-range"}'
+
+# 5) Reload chat history
+curl "http://localhost:8000/api/v1/sessions/$SESSION_ID/messages" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 If the response includes `"interrupted": true`:

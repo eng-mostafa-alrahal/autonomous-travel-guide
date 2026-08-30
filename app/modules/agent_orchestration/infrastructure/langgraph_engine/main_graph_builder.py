@@ -32,6 +32,7 @@ from app.infrastructure.travel.factory import (
 )
 from app.modules.agent_orchestration.application.dtos.agent_result import (
     AgentEvent,
+    AgentMessage,
     AgentRunResult,
     AgentStateSnapshot,
 )
@@ -48,6 +49,8 @@ from app.modules.agent_orchestration.application.use_cases.kb_status_service imp
 )
 from app.modules.agent_orchestration.domain.states.supervisor_state import SupervisorState
 from app.modules.agent_orchestration.infrastructure.langgraph_engine.mappers.state_mapper import (
+    _interrupt_message,
+    _interrupt_payload,
     snapshot_is_paused,
     to_agent_events,
     to_run_result,
@@ -388,6 +391,17 @@ class MainGraphOrchestrator(IAgentOrchestrator):
                         delta_ms,
                     )
                 yield event
+        # When the graph pauses for human input, surface the question as chat
+        # content so stream clients aren't left with a blank "Action needed".
+        snapshot = await graph.aget_state(config)
+        if snapshot_is_paused(snapshot):
+            ask = _interrupt_message(_interrupt_payload(snapshot))
+            if ask:
+                yield AgentEvent(
+                    node="human_gate",
+                    messages=[AgentMessage(type="ai", content=ask)],
+                    namespace=[],
+                )
         total_ms = (perf_counter() - started) * 1000
         logger.info(
             "graph.stream completed request_id=%s thread_id=%s events=%d elapsed_ms=%.1f",

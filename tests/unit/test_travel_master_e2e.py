@@ -60,6 +60,7 @@ class _FakeStructured:
                 origin_city="Metropolis",
                 num_days=3,
                 budget="$1500",
+                interests=["history", "food"],
             )
         if self._schema is PreparedKnowledge:
             return PreparedKnowledge(
@@ -231,19 +232,19 @@ async def test_stream_reports_phase_progress_from_inside_subgraphs():
 
     # Requirements -> KB miss, all before the interrupt. (city_expert now runs
     # first as the gate; on a KB miss it short-circuits to the build request.)
-    assert ("requirements", "Getting started on your trip plan.") in first_pass
-    assert any("bringing in the specialists" in s for s in statuses)
-    assert any("asking to run deep research" in s for s in statuses)
+    assert ("requirements", "Let's plan your trip together.") in first_pass
+    assert any("looking into the best options" in s for s in statuses)
+    assert any("checking if you'd like me to research" in s for s in statuses)
 
     second_pass = await collect(Command(resume={"action": "approve"}))
     build_statuses = [status for _phase, status in second_pass]
 
     # The long research/ingest steps announce themselves before they run.
     assert any("this can take a few minutes" in s for s in build_statuses)
-    assert any("Expanding the research with extra guidebook chapters" in s for s in build_statuses)
-    assert any("Knowledge base ready" in s for s in build_statuses)
-    assert any("Re-planning" in s for s in build_statuses)
-    assert ("done", "Your itinerary is ready.") in second_pass
+    assert any("Organizing what I found" in s for s in build_statuses)
+    assert any("All set" in s for s in build_statuses)
+    assert any("Back to your trip" in s for s in build_statuses)
+    assert ("done", "Here's a draft plan — we can tweak it together.") in second_pass
 
 
 async def test_kb_miss_reject_uses_web_fallback_without_storing():

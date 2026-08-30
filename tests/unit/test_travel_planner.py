@@ -64,18 +64,43 @@ def test_trip_requirements_interests_coerced_from_string():
     assert req.interests == ["food"]
 
 
+def test_slots_to_ask_soft_interests_then_skip():
+    from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.travel_planner.nodes.requirements import (  # noqa: E501
+        _ask_message,
+        _slots_to_ask,
+    )
+
+    incomplete = TripRequirements(destination_city="Kyoto", num_days=3, budget="$1k")
+    assert _slots_to_ask(incomplete, preferences_asked=False)[0] == "origin"
+
+    ready = TripRequirements(
+        destination_city="Kyoto",
+        origin_city="Tokyo",
+        num_days=3,
+        budget="$1k",
+    )
+    assert _slots_to_ask(ready, preferences_asked=False) == ["interests"]
+    assert _slots_to_ask(ready, preferences_asked=True) == []
+    assert "especially into" in _ask_message(["interests"])
+
+
 def test_route_after_requirements_incomplete():
     state = {"requirements_complete": False}
     assert route_after_requirements(state) == "ask_requirements"  # type: ignore[arg-type]
 
 
+def test_route_after_requirements_needs_destination_confirm():
+    state = {"requirements_complete": True, "destination_confirmed": False}
+    assert route_after_requirements(state) == "confirm_destination"  # type: ignore[arg-type]
+
+
 def test_route_after_requirements_complete():
-    state = {"requirements_complete": True}
+    state = {"requirements_complete": True, "destination_confirmed": True}
     assert route_after_requirements(state) == "city_expert"  # type: ignore[arg-type]
 
 
 def test_route_after_requirements_error():
-    state = {"error": "x", "requirements_complete": True}
+    state = {"error": "x", "requirements_complete": True, "destination_confirmed": True}
     assert route_after_requirements(state) == "end"  # type: ignore[arg-type]
 
 
@@ -144,8 +169,102 @@ def test_travel_planner_graph_compiles():
     expected = {
         "collect_requirements",
         "ask_requirements",
+        "confirm_destination",
         "spatial_cluster",
         "synthesize_itinerary",
     }
     expected |= set(SPECIALISTS)
     assert expected <= nodes
+
+
+def test_evaluate_destination_ambiguous_same_name():
+    from app.modules.agent_orchestration.domain.destination_resolve import (
+        PlaceCandidate,
+        evaluate_destination,
+    )
+
+    decision = evaluate_destination(
+        user_city="Paris",
+        user_country=None,
+        candidates=[
+            PlaceCandidate(city="Paris", country="France", label="Paris, France"),
+            PlaceCandidate(city="Paris", country="United States", label="Paris, Texas, US"),
+        ],
+    )
+    assert decision["needs_confirmation"] is True
+    assert decision["reason"] == "ambiguous"
+
+
+def test_evaluate_destination_possible_typo():
+    from app.modules.agent_orchestration.domain.destination_resolve import (
+        PlaceCandidate,
+        evaluate_destination,
+    )
+
+    decision = evaluate_destination(
+        user_city="Lisben",
+        user_country="Portugal",
+        candidates=[
+            PlaceCandidate(city="Lisbon", country="Portugal", label="Lisbon, Portugal"),
+        ],
+    )
+    assert decision["needs_confirmation"] is True
+    assert decision["reason"] == "possible_typo"
+
+
+def test_evaluate_destination_exact_ok():
+    from app.modules.agent_orchestration.domain.destination_resolve import (
+        PlaceCandidate,
+        evaluate_destination,
+    )
+
+    decision = evaluate_destination(
+        user_city="Kyoto",
+        user_country="Japan",
+        candidates=[
+            PlaceCandidate(city="Kyoto", country="Japan", label="Kyoto, Japan"),
+        ],
+    )
+    assert decision["needs_confirmation"] is False
+    assert decision["canonical_city"] == "Kyoto"
+
+
+def test_apply_destination_answer_index_and_yes():
+    from app.modules.agent_orchestration.domain.destination_resolve import (
+        apply_destination_answer,
+    )
+
+    cands = [
+        {"city": "Paris", "country": "France", "label": "Paris, France"},
+        {"city": "Paris", "country": "United States", "label": "Paris, Texas, US"},
+    ]
+    assert apply_destination_answer("2", candidates=cands, fallback_city="Paris", fallback_country=None) == (
+        "Paris",
+        "United States",
+    )
+    assert apply_destination_answer(
+        "yes", candidates=cands, fallback_city="X", fallback_country="Y"
+    ) == ("Paris", "France")
+
+
+def test_ensure_travel_and_costs_appends_when_missing():
+    from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.travel_planner.nodes.itinerary import (  # noqa: E501
+        ensure_travel_and_costs,
+    )
+
+    draft = "## Trip vibe\nA lovely weekend of museums."
+    out = ensure_travel_and_costs(
+        draft,
+        {
+            "flights_logistics": [
+                {"summary": "JFK → CDG", "price_usd": 700, "details": "Direct ~8h"}
+            ],
+            "hotels": [
+                {"name": "Hotel Rivoli", "area": "Louvre", "nightly_rate_usd": 180}
+            ],
+        },
+        {"num_days": 3, "budget": "$2000"},
+    )
+    assert "Getting there" in out
+    assert "$700" in out or "~$700" in out
+    assert "Hotel Rivoli" in out

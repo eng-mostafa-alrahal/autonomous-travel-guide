@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -56,6 +57,13 @@ def _format_notes(outputs: dict[str, list[dict[str, Any]]]) -> str:
     for key in _ORDER:
         items = outputs.get(key) or []
         if not items:
+            if key == "flights_logistics":
+                blocks.append(
+                    "## Travel & getting around\n"
+                    "- (no priced flight/transit options found — still include a "
+                    "Getting there / Getting around section and note that prices "
+                    "should be verified before booking)"
+                )
             continue
         lines = "\n".join(_format_item(i) for i in items if isinstance(i, dict))
         if lines:
@@ -89,6 +97,84 @@ def _format_day_plan(clusters: list[dict[str, Any]]) -> str:
     return "\n\n".join(blocks)
 
 
+def _travel_cost_appendix(
+    outputs: dict[str, list[dict[str, Any]]], requirements: dict[str, Any]
+) -> str:
+    """Deterministic fallback block so flights / lodging / costs are never omitted."""
+    flights = [i for i in (outputs.get("flights_logistics") or []) if isinstance(i, dict)]
+    hotels = [i for i in (outputs.get("hotels") or []) if isinstance(i, dict)]
+    days = requirements.get("num_days")
+    budget = requirements.get("budget") or "your budget"
+    lines: list[str] = ["## Getting there, getting around & costs"]
+
+    if flights:
+        lines.append("### Getting there & around")
+        lines.extend(_format_item(i) for i in flights)
+    else:
+        lines.append(
+            "### Getting there & around\n"
+            "- I didn't get solid priced flight options this round — "
+            "double-check routes and fares before you book."
+        )
+
+    if hotels:
+        lines.append("### Where to stay")
+        lines.extend(_format_item(i) for i in hotels)
+
+    cost_bits: list[str] = []
+    flight_prices = [i["price_usd"] for i in flights if i.get("price_usd") is not None]
+    hotel_rates = [i["nightly_rate_usd"] for i in hotels if i.get("nightly_rate_usd") is not None]
+    if flight_prices:
+        cost_bits.append(f"flights from ~${min(flight_prices):g}")
+    if hotel_rates and days:
+        try:
+            nights = max(int(days) - 1, 1)
+        except (TypeError, ValueError):
+            nights = 1
+        mid = sorted(hotel_rates)[len(hotel_rates) // 2]
+        cost_bits.append(f"lodging ~${mid:g}/night × {nights} nights (~${mid * nights:g})")
+    elif hotel_rates:
+        cost_bits.append(f"lodging from ~${min(hotel_rates):g}/night")
+
+    lines.append("### Rough cost sketch")
+    if cost_bits:
+        lines.append(f"- Ballpark: {'; '.join(cost_bits)} (against {budget}).")
+    else:
+        lines.append(
+            f"- Keep an eye on flights + lodging + local transit vs {budget}; "
+            "I can refine numbers once you pick options."
+        )
+    return "\n".join(lines)
+
+
+_TRAVEL_HINTS = re.compile(
+    r"\b(flight|flights|getting there|airport|train|ferry|transit|metro|uber|taxi)\b",
+    re.I,
+)
+_COST_HINTS = re.compile(r"(\$\s?\d|\busd\b|\bcost\b|\bbudget\b|\b/night\b|\bprice\b)", re.I)
+
+
+def ensure_travel_and_costs(
+    content: str,
+    outputs: dict[str, list[dict[str, Any]]],
+    requirements: dict[str, Any],
+) -> str:
+    """Append a logistics/cost block if the LLM draft skipped them."""
+    text = (content or "").strip()
+    has_travel = bool(_TRAVEL_HINTS.search(text))
+    has_cost = bool(_COST_HINTS.search(text))
+    flights = outputs.get("flights_logistics") or []
+    hotels = outputs.get("hotels") or []
+    if has_travel and has_cost:
+        return text
+    if not flights and not hotels and has_travel:
+        return text
+    appendix = _travel_cost_appendix(outputs, requirements)
+    if not text:
+        return appendix
+    return f"{text}\n\n---\n\n{appendix}"
+
+
 def make_itinerary_node(llm: BaseChatModel, *, prompt_provider: IPromptProvider):
     async def synthesize_itinerary(state: TravelPlannerState) -> dict[str, Any]:
         requirements = state.get("requirements", {})
@@ -109,15 +195,23 @@ def make_itinerary_node(llm: BaseChatModel, *, prompt_provider: IPromptProvider)
         response = await llm.ainvoke(
             [
                 SystemMessage(content=rendered.content),
-                HumanMessage(content="Create the itinerary now."),
+                HumanMessage(
+                    content=(
+                        "Write the full draft plan now. You MUST include Getting there, "
+                        "Getting around, Where to stay, a Rough cost sketch with $ figures "
+                        "when the inputs have them, and a day-by-day plan — then invite tweaks."
+                    )
+                ),
             ],
             config=trace_run_config_from_metadata(rendered.metadata),
         )
-        content = str(response.content)
+        content = ensure_travel_and_costs(str(response.content), outputs, requirements)
         return {
             "itinerary": content,
             "messages": [AIMessage(content=content)],
-            **phases.phase_update(phases.DONE, "Your itinerary is ready."),
+            **phases.phase_update(
+                phases.DONE, "Here's a draft plan — we can tweak it together."
+            ),
         }
 
     return synthesize_itinerary

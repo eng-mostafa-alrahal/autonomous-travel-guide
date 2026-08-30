@@ -94,7 +94,7 @@ def build_travel_master_graph(
     def travel_root(_state: TravelRootState) -> dict[str, Any]:
         # Entry dispatch. Currently always plans first; extensible to detect a
         # direct "build knowledge" intent later.
-        return phases.phase_update(phases.REQUIREMENTS, "Getting started on your trip plan.")
+        return phases.phase_update(phases.REQUIREMENTS, "Let's plan your trip together.")
 
     def after_build(_state: TravelRootState) -> dict[str, Any]:
         # Mark that we tried building so the re-plan won't trigger another build,
@@ -102,7 +102,9 @@ def build_travel_master_graph(
         return {
             "kb_build_attempted": True,
             "kb_miss": False,
-            **phases.phase_update(phases.PLANNING, "Re-planning with what I just learned."),
+            **phases.phase_update(
+                phases.PLANNING, "Back to your trip with what I just learned."
+            ),
         }
 
     master = StateGraph(TravelRootState)

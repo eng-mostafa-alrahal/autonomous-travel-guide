@@ -20,7 +20,7 @@ agent_orchestration/
 | `invoke(message, session_id, user_id)` | Run once, return final `AgentRunResult` |
 | `stream(...)` | Async iterator of per-node `AgentEvent`s |
 | `resume(thread_id, action, feedback)` | Continue a paused run (HITL) |
-| `get_state(thread_id)` | Snapshot of the current state (next nodes, tasks, interrupted?) |
+| `get_state(thread_id)` | Snapshot of the current state (next nodes, tasks, interrupted?, messages) |
 
 **`MainGraphOrchestrator`** is the only adapter. It is the single place that knows LangGraph exists — everything else receives DTOs.
 

@@ -1,6 +1,10 @@
 # Travel Planner
 
-The **Travel Planner** is the user-facing travel graph. It collects trip requirements from the user (human-in-the-loop), then orchestrates specialist agents to produce a day-by-day itinerary. The city-expert specialist answers destination questions from the knowledge base (filled by the [Knowledge Builder](./knowledge-builder.md)) with a web-search fallback.
+The **Travel Planner** is the user-facing travel graph. It collects trip requirements **conversationally** (one friendly question at a time, plus a soft nudge for interests), then orchestrates specialist agents to produce a **skimmable draft** day-by-day itinerary the user can refine. The city-expert specialist answers destination questions from the knowledge base (filled by the [Knowledge Builder](./knowledge-builder.md)) with a web-search fallback.
+
+## Conversational tone
+
+User-facing copy (HITL questions, progress lines, itinerary prose) should feel like a helpful travel buddy — warm, short, and collaborative. Progress `phase_status` strings use everyday language; they must **not** expose backend terms (`specialist`, `knowledge base`, `deep research`, node names, etc.). Internal phase keys (`requirements`, `planning`, …) stay as-is for clients.
 
 ## Pipeline
 
@@ -9,7 +13,9 @@ flowchart TD
     Start([entry]) --> Collect[collect_requirements - extract slots]
     Collect -->|missing slots| Ask[ask_requirements - HITL interrupt]
     Ask --> Collect
-    Collect -->|complete| City[city_expert - RAG + web fallback]
+    Collect -->|complete| Confirm[confirm_destination - spell / ambiguity]
+    Confirm -->|needs clarify| Confirm
+    Confirm -->|confirmed| City[city_expert - RAG + web fallback]
     City -->|KB miss| EndNode([END])
     City -->|Send fan-out| Hotels[hotels]
     City -->|Send fan-out| Flights[flights_logistics]
@@ -22,8 +28,9 @@ flowchart TD
 ```
 
 The **supervisor** is split into two responsibilities that the plan merged into one role:
-1. **Requirements gathering** — `collect_requirements` extracts trip slots from the conversation via structured output (required: destination, **origin / departure city**, days, budget); if required slots are missing, `ask_requirements` pauses with `interrupt()` to ask the user, then loops back.
-2. **Specialist fan-out** — once requirements are complete, `city_expert` runs first (it's the only specialist that can trigger the Knowledge Builder on a KB miss). Provided there's no miss, `fan_out_specialists` then dispatches `hotels`, `flights_logistics`, and `food` **concurrently** via LangGraph `Send`. Their outputs merge under the `specialist_outputs` reducer, and once all three settle the flow continues to `spatial_cluster` → `synthesize_itinerary`.
+1. **Requirements gathering** — `collect_requirements` extracts trip slots from the conversation via structured output (required: destination, **origin / departure city**, days, budget). If anything is still needed, `ask_requirements` pauses with `interrupt()` and asks **one friendly question at a time** (not a checklist). After hard slots are filled, a **soft** nudge asks about `interests` once (`preferences_asked`); the user can skip and planning still continues.
+2. **Destination confirm** — `confirm_destination` resolves the place via the places provider (or an LLM fallback): fixes likely misspellings, and asks when the name is ambiguous (same city in two countries, or a name that is both a city and a country). Resume kind: `destination_confirm`.
+3. **Specialist fan-out** — once the destination is confirmed, `city_expert` runs first (it's the only specialist that can trigger the Knowledge Builder on a KB miss). Provided there's no miss, `fan_out_specialists` then dispatches `hotels`, `flights_logistics`, and `food` **concurrently** via LangGraph `Send`. Their outputs merge under the `specialist_outputs` reducer, and once all three settle the flow continues to `spatial_cluster` → `synthesize_itinerary`.
 
 > Design note: dispatch is deterministic fan-out, not per-step LLM routing. A planner needs *all* sections (lodging, travel, food, local knowledge), so running the three independent specialists in parallel is faster than a sequential queue while staying just as predictable. `city_expert` stays sequential and first because its KB-miss hand-off must complete (or be declined) before the others are worth running.
 
@@ -37,7 +44,7 @@ The **supervisor** is split into two responsibilities that the plan merged into 
 | `budget` | Yes | Free text (e.g. "$1500", "mid-range"). |
 | `start_date` | No | — |
 | `party_size` | No | — |
-| `interests` | No | List of themes (food, history, nightlife...). |
+| `interests` | Soft | Asked once after hard slots if still empty; empty after that ask does not block planning (`preferences_asked`). |
 
 ## State
 
@@ -46,11 +53,13 @@ The **supervisor** is split into two responsibilities that the plan merged into 
 | Field | Type | Notes |
 |-------|------|-------|
 | `requirements` | `dict` | Latest extracted `TripRequirements`. |
-| `requirements_complete` | `bool` | All required slots present. |
-| `missing_slots` | `list[str]` | What's still needed. |
+| `requirements_complete` | `bool` | Hard slots filled (and soft interests ask done or satisfied). |
+| `missing_slots` | `list[str]` | What's still needed (hard slots and/or soft `interests`). |
+| `preferences_asked` | `bool` | Soft interests nudge already shown (`keep_true`). |
+| `destination_confirmed` | `bool` | Spelling / ambiguity check already done (`keep_true`). |
 | `specialist_outputs` | `dict[str, list[dict]]` | Per-specialist **structured** results (validated Pydantic items, JSON-serialised), merged via reducer. |
 | `clusters` | `list[dict]` | Deterministic per-day POI groupings (`DayCluster` dumps) from `spatial_cluster`. |
-| `itinerary` | `str \| None` | Final plan. |
+| `itinerary` | `str \| None` | Draft plan (collaborative; invites follow-up tweaks). |
 | `destination_key` | `str` | Canonical KB key set by city_expert on a miss (cross-graph). |
 | `city` / `country` | `str \| None` | Destination handed to the Knowledge Builder (cross-graph). |
 | `kb_miss` | `bool` | City_expert found no KB data and requests a build. |
@@ -60,20 +69,20 @@ The **supervisor** is split into two responsibilities that the plan merged into 
 
 ## Progress reporting
 
-Nodes attach a `phase` + `phase_status` to their state updates; the SSE layer turns changes into `{"phase", "status"}` events (see [API reference](./api-reference.md#post-chatstream)). Phase constants and status-line builders live in `app/modules/agent_orchestration/domain/phases.py` — pure domain, no framework imports.
+Nodes attach a `phase` + `phase_status` to their state updates; the SSE layer turns changes into `{"phase", "status"}` events (see [API reference](./api-reference.md#post-chatstream)). Phase constants and status-line builders live in `app/modules/agent_orchestration/domain/phases.py` — pure domain, no framework imports. Status lines are **plain-language** (e.g. “Looking for places to stay…”) — not internal role or pipeline names.
 
 **A node announces the work that comes next.** LangGraph publishes a node's updates only *after* it returns, so announcing what a node just did would report every step too late. The cheap nodes therefore carry the announcements standing in front of the slow ones:
 
-| Node | Phase | Announces |
+| Node | Phase | Announces (examples) |
 |------|-------|-----------|
-| `travel_root` (master) | `requirements` | Run started. |
-| `collect_requirements` | `requirements` / `planning` | Which slots are still missing, or that specialists are starting. |
-| `ask_requirements` | `requirements` | Answer received, re-checking details. |
-| `city_expert` (KB hit) | `planning` | Local insights ready; the parallel specialists are starting. |
-| `city_expert` (KB miss) | `knowledge_build` | A knowledge build is about to be proposed. |
-| `hotels` / `flights_logistics` / `food` | `planning` | Each parallel specialist announces itself as it completes. |
-| `spatial_cluster` | `planning` | Places grouped into per-day buckets. |
-| `synthesize_itinerary` | `done` | Itinerary finished. |
+| `travel_root` (master) | `requirements` | "Let's plan your trip together." |
+| `collect_requirements` | `requirements` / `planning` | What we're still waiting to hear, or "Got it — looking into the best options…" |
+| `ask_requirements` | `requirements` | "Thanks — taking another look at your trip." |
+| `city_expert` (KB hit) | `planning` | "Got a feel for {dest} — checking stays, food…" |
+| `city_expert` (KB miss) | `knowledge_build` | Friendly research approval is about to be proposed. |
+| `hotels` / `flights_logistics` / `food` | `planning` | Stays / getting there / food (no "specialist" wording). |
+| `spatial_cluster` | `planning` | "Organizing your days…" |
+| `synthesize_itinerary` | `done` | "Here's a draft plan — we can tweak it together." |
 
 Because the parallel specialists finish in the same super-step, each writes its own `phase`/`phase_status`; the `merge_phase` reducer (`domain/phases.py`) deterministically surfaces the first write of the step so the channel stays a single user-facing string (the graph is deterministic, so this is stable run-to-run).
 
@@ -135,7 +144,7 @@ Registered in `app/core/config/prompt_registry.toml`:
 | `travel_requirements` | `travel_planner/requirements_v1.md.jinja` | Structured extraction of `TripRequirements`. |
 | `travel_specialist` | `travel_planner/specialist_v1.md.jinja` | Shared hotels/flights/food prompt (parameterized by `role`). |
 | `travel_city_expert` | `travel_planner/city_expert_v1.md.jinja` | Answer destination questions from KB evidence + web fallback. |
-| `travel_itinerary` | `travel_planner/itinerary_v1.md.jinja` | Compose the final day-by-day plan. |
+| `travel_itinerary` | `travel_planner/itinerary_v1.md.jinja` | Full draft with Getting there / around, lodging, cost sketch, day-by-day, then invite tweaks. A code guard appends flights/costs if the model skips them. |
 
 ## Dependencies (injected into `build_travel_planner_graph`)
 

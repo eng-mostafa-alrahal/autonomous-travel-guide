@@ -26,6 +26,7 @@ from app.modules.agent_orchestration.application.ports.deep_research_port import
 from app.modules.agent_orchestration.application.ports.ingestion_port import (
     DestinationRef,
     IIngestionService,
+    IngestionResult,
     IngestionSegment,
 )
 from app.modules.agent_orchestration.application.ports.prompt_provider_port import IPromptProvider
@@ -44,6 +45,42 @@ from app.modules.agent_orchestration.infrastructure.langgraph_engine.subgraphs.k
 )
 
 logger = logging.getLogger(__name__)
+
+# Ingest only — never re-run deep research on a save failure (same prepared_segments).
+_INGEST_MAX_ATTEMPTS = 3  # initial try + 2 retries
+_INGEST_RETRY_DELAY_S = 1.0
+
+
+async def ingest_segments_with_retries(
+    ingestion_service: IIngestionService,
+    segments: list[IngestionSegment],
+    destination: DestinationRef,
+    *,
+    max_attempts: int = _INGEST_MAX_ATTEMPTS,
+    retry_delay_s: float = _INGEST_RETRY_DELAY_S,
+) -> IngestionResult:
+    """Persist segments, retrying transient failures without re-researching."""
+    last_exc: BaseException | None = None
+    attempts = max(1, max_attempts)
+    for attempt in range(1, attempts + 1):
+        try:
+            return await ingestion_service.ingest(segments, destination=destination)
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                break
+            logger.warning(
+                "ingestion attempt %d/%d failed for %s: %s — retrying with same segments",
+                attempt,
+                attempts,
+                destination.destination_key,
+                exc,
+            )
+            if retry_delay_s > 0:
+                await asyncio.sleep(retry_delay_s)
+    assert last_exc is not None
+    raise last_exc
+
 
 DEFAULT_TOPICS: list[str] = [
     "history",
@@ -184,9 +221,9 @@ def build_knowledge_builder_graph(
             {
                 "kind": "kb_build",
                 "message": (
-                    f"I don't have a knowledge base for {_where(state)} yet. "
-                    "I can research it now, but deep research may take a few minutes. "
-                    "Want me to start?"
+                    f"I don't know {_where(state)} well yet. "
+                    "I can look it up thoroughly so your plan feels more personal "
+                    "(it may take a few minutes). Want me to?"
                 ),
                 "destination_key": state.get("destination_key"),
                 "city": state.get("city"),
@@ -202,16 +239,17 @@ def build_knowledge_builder_graph(
             updates.update(
                 phases.phase_update(
                     phases.KNOWLEDGE_BUILD,
-                    f"Researching {_where(state)} in depth — this can take a few minutes.",
+                    f"Looking up {_where(state)} thoroughly — this can take a few minutes.",
                 )
             )
         else:
             updates["messages"] = [
-                AIMessage(content="No problem — I won't build that knowledge base right now.")
+                AIMessage(content="No worries — I'll work with what's online instead.")
             ]
             updates.update(
                 phases.phase_update(
-                    phases.PLANNING, "Skipping the knowledge build — using web search instead."
+                    phases.PLANNING,
+                    "Skipping the deep dive — using quick web results instead.",
                 )
             )
         return updates
@@ -260,9 +298,16 @@ def build_knowledge_builder_graph(
             return {
                 "error": f"deep research failed: {exc_text}",
                 "messages": [
-                    AIMessage(content="The deep research step failed. Please try again later.")
+                    AIMessage(
+                        content=(
+                            "I couldn't finish researching that destination. "
+                            "Want to try again later?"
+                        )
+                    )
                 ],
-                **phases.phase_update(phases.KNOWLEDGE_BUILD, "Deep research failed."),
+                **phases.phase_update(
+                    phases.KNOWLEDGE_BUILD, "Couldn't finish the research."
+                ),
             }
 
         if failures:
@@ -274,11 +319,13 @@ def build_knowledge_builder_graph(
             "raw_research": "\n\n".join(sections),
             "research_sources": list(dict.fromkeys(sources)),
             **phases.phase_update(
-                phases.KNOWLEDGE_BUILD, "Expanding the research with extra guidebook chapters, then storing it."
+                phases.KNOWLEDGE_BUILD,
+                "Organizing what I found into a handy guide.",
             ),
         }
 
     async def ingest(state: KnowledgeBuilderState) -> dict[str, Any]:
+        # Reuses prepared_segments from deduplicate — do not re-run deep research here.
         segments = [
             IngestionSegment(topic=s["topic"], content=s["content"], source="deep_research")
             for s in state.get("prepared_segments", [])
@@ -289,9 +336,14 @@ def build_knowledge_builder_graph(
             country=state.get("country"),
         )
         try:
-            result = await ingestion_service.ingest(segments, destination=destination)
+            result = await ingest_segments_with_retries(
+                ingestion_service, segments, destination
+            )
         except Exception as exc:
-            logger.exception("ingestion failed")
+            logger.exception(
+                "ingestion failed after %d attempts (research results were not re-fetched)",
+                _INGEST_MAX_ATTEMPTS,
+            )
             await kb_status_service.mark_failed(
                 destination_key=state["destination_key"],
                 city=state.get("city"),
@@ -301,11 +353,15 @@ def build_knowledge_builder_graph(
             return {
                 "error": f"ingestion failed: {exc}",
                 "messages": [
-                    AIMessage(content="I researched the destination but couldn't store it. "
-                              "Please try again later.")
+                    AIMessage(
+                        content=(
+                            "I learned about the place but couldn't save it. "
+                            "Please try again later."
+                        )
+                    )
                 ],
                 **phases.phase_update(
-                    phases.KNOWLEDGE_BUILD, "Couldn't store the research in the knowledge base."
+                    phases.KNOWLEDGE_BUILD, "Couldn't save what I learned."
                 ),
             }
         await kb_status_service.mark_ready(
@@ -318,20 +374,19 @@ def build_knowledge_builder_graph(
             "doc_count": result.doc_count,
             **phases.phase_update(
                 phases.KNOWLEDGE_BUILD,
-                f"Knowledge base ready ({result.doc_count} entries).",
+                f"All set — I've got notes on {_where(state)} ready.",
             ),
         }
 
     def notify_complete(state: KnowledgeBuilderState) -> dict[str, Any]:
         if state.get("error"):
             return {}
-        count = state.get("doc_count", 0)
         return {
             "messages": [
                 AIMessage(
                     content=(
-                        f"The knowledge base for {_where(state)} is ready "
-                        f"({count} entries). Ask me anything about it!"
+                        f"I've got {_where(state)} covered now. "
+                        "Ask me anything, or we can keep planning!"
                     )
                 )
             ]

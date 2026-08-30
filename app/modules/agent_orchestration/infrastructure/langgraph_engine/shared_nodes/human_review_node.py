@@ -17,7 +17,7 @@ from langgraph.types import interrupt
 def human_review_node(state: dict[str, Any]) -> dict[str, Any]:
     decision: dict[str, Any] = interrupt(
         {
-            "message": "Someone needs to approve this before we continue.",
+            "message": "Quick check — okay to continue?",
             "next_agent": state.get("next_agent"),
             "reasoning": state.get("delegation_reasoning"),
         }

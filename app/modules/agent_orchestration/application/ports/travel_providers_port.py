@@ -35,6 +35,25 @@ class IPlacesProvider(ABC):
         """Best single match for a place name with coordinates, or None."""
         ...
 
+    async def search_destinations(
+        self, query: str, *, limit: int = 5
+    ) -> list[dict[str, str | None]] | None:
+        """Resolve city/country candidates for trip destinations.
+
+        Each item: ``{"city", "country", "label"}``. Default: single ``geocode`` hit.
+        Override for multi-result disambiguation (misspellings / same-name cities).
+        """
+        hit = await self.geocode(query)
+        if hit is None:
+            return None
+        # Best-effort split of "City, Country, …" from notes/display.
+        notes = (hit.notes or hit.name or "").strip()
+        parts = [p.strip() for p in notes.split(",") if p.strip()]
+        city = hit.name
+        country = parts[-1] if len(parts) > 1 else None
+        label = ", ".join(p for p in (city, country) if p) or hit.name
+        return [{"city": city, "country": country, "label": label}]
+
 
 class ITransitProvider(ABC):
     """Travel time/distance between two points (e.g. OSRM routing)."""

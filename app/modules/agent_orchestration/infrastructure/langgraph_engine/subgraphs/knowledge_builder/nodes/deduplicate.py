@@ -111,7 +111,7 @@ def make_deduplicate_node(llm: BaseChatModel, *, prompt_provider: IPromptProvide
             "prepared_segments": segments,
             **phases.phase_update(
                 phases.KNOWLEDGE_BUILD,
-                "Expanding the research with extra guidebook chapters, then storing it.",
+                "Saving the guide so I can use it for your trip.",
             ),
         }
 

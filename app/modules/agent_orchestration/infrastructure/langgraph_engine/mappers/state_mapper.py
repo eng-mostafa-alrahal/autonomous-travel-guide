@@ -144,6 +144,14 @@ def _interrupt_payload(snapshot: Any) -> Any:
     return None
 
 
+def _interrupt_message(payload: Any) -> str | None:
+    """User-facing question from an interrupt payload, if any."""
+    if isinstance(payload, dict):
+        msg = payload.get("message")
+        return str(msg).strip() if msg else None
+    return None
+
+
 def to_run_result(
     state: Any,
     snapshot: Any,
@@ -151,13 +159,16 @@ def to_run_result(
     thread_id: str,
 ) -> AgentRunResult:
     interrupted = snapshot_is_paused(snapshot)
+    messages = _messages_from_state(state)
+    approval_raw = _interrupt_payload(snapshot) if interrupted else None
+    ask = _interrupt_message(approval_raw) if interrupted else None
+    if ask and not any(m.type == "ai" and m.content.strip() == ask for m in messages):
+        messages = [*messages, AgentMessage(type="ai", content=ask)]
     return AgentRunResult(
-        messages=_messages_from_state(state),
+        messages=messages,
         interrupted=interrupted,
         thread_id=thread_id if interrupted else None,
-        approval_request=_as_approval_request(_interrupt_payload(snapshot))
-        if interrupted
-        else None,
+        approval_request=_as_approval_request(approval_raw) if interrupted else None,
     )
 
 
@@ -237,9 +248,11 @@ def to_state_snapshot(snapshot: Any, *, thread_id: str) -> AgentStateSnapshot:
                 interrupts=interrupts,
             )
         )
+    values = getattr(snapshot, "values", None)
     return AgentStateSnapshot(
         thread_id=thread_id,
         interrupted=snapshot_is_paused(snapshot),
         next_nodes=next_nodes,
         tasks=tasks_out,
+        messages=_messages_from_state(values),
     )
